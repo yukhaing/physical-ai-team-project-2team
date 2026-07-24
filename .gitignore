@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific: exclude large dataset/model files
+yolo/data/roboflow_dataset/train/
+yolo/data/roboflow_dataset/valid/
+yolo/data/roboflow_dataset/test/
+yolo/data/raw_photos/*.jpg
+yolo/data/raw_photos/*.png
+yolo/models/*.pt
