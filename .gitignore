@@ -223,4 +223,4 @@ yolo/data/roboflow_dataset/valid/
 yolo/data/roboflow_dataset/test/
 yolo/data/raw_photos/*.jpg
 yolo/data/raw_photos/*.png
-yolo/models/*.pt
+yolo/**/*.pt
