@@ -1,0 +1,7 @@
+<library path="omx_target_panel">
+  <class name="omx_target_control/OmxTargetPanel"
+         type="omx_target_control::OmxTargetPanel"
+         base_class_type="rviz_common::Panel">
+    <description>Enter a safe OMX-F target and visualize its reachable workspace.</description>
+  </class>
+</library>

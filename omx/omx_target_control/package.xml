@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>omx_target_control</name>
+  <version>0.1.0</version>
+  <description>RViz target entry, workspace visualization, and MoveL bridge for OMX-F.</description>
+  <maintainer email="chjh7336@gmail.com">최재현</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>robotis_interfaces</depend>
+  <depend>rviz_common</depend>
+  <depend>visualization_msgs</depend>
+
+  <export>
+    <rviz plugin="${prefix}/plugin_description.xml"/>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
