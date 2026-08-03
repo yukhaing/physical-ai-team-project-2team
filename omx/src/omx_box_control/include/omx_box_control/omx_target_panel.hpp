@@ -1,5 +1,5 @@
-#ifndef OMX_TARGET_CONTROL__OMX_TARGET_PANEL_HPP_
-#define OMX_TARGET_CONTROL__OMX_TARGET_PANEL_HPP_
+#ifndef OMX_BOX_CONTROL__OMX_TARGET_PANEL_HPP_
+#define OMX_BOX_CONTROL__OMX_TARGET_PANEL_HPP_
 
 #include <memory>
 
@@ -12,7 +12,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 
-namespace omx_target_control
+namespace omx_box_control
 {
 
 class OmxTargetPanel : public rviz_common::Panel
@@ -28,10 +28,10 @@ public:
 private Q_SLOTS:
   void publishTarget();
   void toggleWorkspace(bool visible);
+  void publishTargetMarkers(const geometry_msgs::msg::PoseStamped & target);
 
 private:
-  QDoubleSpinBox * makeInput(double value, double minimum, double maximum);
-  void publishTargetMarkers(const geometry_msgs::msg::PoseStamped & target);
+  QDoubleSpinBox * makePositionInput(double value);
   QDoubleSpinBox * x_input_;
   QDoubleSpinBox * y_input_;
   QDoubleSpinBox * z_input_;
@@ -39,10 +39,10 @@ private:
   QPushButton * move_button_;
   QPushButton * workspace_button_;
   rclcpp::Node::SharedPtr node_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_publisher_;
 };
 
-}  // namespace omx_target_control
+}  // namespace omx_box_control
 
-#endif  // OMX_TARGET_CONTROL__OMX_TARGET_PANEL_HPP_
+#endif  // OMX_BOX_CONTROL__OMX_TARGET_PANEL_HPP_
