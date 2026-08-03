@@ -1,0 +1,7 @@
+<library path="omx_target_panel">
+  <class name="omx_box_control/OmxTargetPanel"
+         type="omx_box_control::OmxTargetPanel"
+         base_class_type="rviz_common::Panel">
+    <description>Enter an OMX target X, Y, and Z position and publish it.</description>
+  </class>
+</library>
