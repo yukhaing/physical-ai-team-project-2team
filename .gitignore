@@ -224,3 +224,5 @@ yolo/data/roboflow_dataset/test/
 yolo/data/raw_photos/*.jpg
 yolo/data/raw_photos/*.png
 yolo/**/*.pt
+yolo/data/raw/
+yolo/data/processed/

@@ -1,4 +1,37 @@
+#********************************************************
+# Model Size Comparison  01
+#--------------------------------------------------------
+# ## Dataset 소스
+# 기존 Roboflow 데이터셋을 base로 사용:
+# https://universe.roboflow.com/inft2060-ffjce/cardboard-boxes-4h3rr/dataset/2
+#- 클래스: Box, Damaged Box
+#- 총 926장
+
 Model,mAP50,mAP50-95,Precision,Recall
 YOLOv8s,0.7473,0.7311,0.6638,0.8074
 YOLOv8m,0.7734,0.763,0.6512,0.8555
 YOLOv8l,0.843,0.8396,0.7018,0.8145
+
+########## NOte : 
+#********************************************************
+
+#********************************************************
+# Model Size Comparison  02
+#--------------------------------------------------------
+# ## Dataset 소스
+# 기존 Roboflow 데이터셋을 base로 사용:
+# https://universe.roboflow.com/meryem-meryem-8twxl/carton-can-detection/dataset/1
+#- 클래스: ['carton box', 'cracked carton box', 'opened carton box', 'wet carton box']
+#- 총 3009장
+
+
+     Model   mAP50  mAP50-95  Precision  Recall
+0  YOLOv8s  0.8096    0.6732     0.8194  0.7910
+1  YOLOv8m  0.7794    0.6610     0.7881  0.7716
+2  YOLOv8l  0.7866    0.6713     0.7888  0.7916
+
+########## Note : r
+#********************************************************
+
+
+
