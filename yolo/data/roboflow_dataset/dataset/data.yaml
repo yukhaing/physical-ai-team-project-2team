@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+nc: 2
+names:
+- normal
+- defect
+roboflow:
+  workspace: meryem-meryem-8twxl
+  project: carton-can-detection
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/meryem-meryem-8twxl/carton-can-detection/dataset/1
