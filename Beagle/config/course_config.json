@@ -1,0 +1,36 @@
+{
+  "robot": {
+    "max_speed_percent": 18,
+    "wheel_radius_m": 0.033,
+    "wheel_base_m": 0.0956,
+    "max_rpm": 93.75,
+    "encoder_meter_per_count_left": 0.000529,
+    "encoder_meter_per_count_right": 0.000537
+  },
+  "lidar": {
+    "min_mm": 50,
+    "max_mm": 4500,
+    "emergency_mm": 140,
+    "turn_mm": 280,
+    "clear_mm": 340,
+    "center_tolerance_mm": 20,
+    "opening_mm": 850
+  },
+  "mapping": {
+    "resolution_m": 0.05,
+    "width_m": 6.0,
+    "height_m": 5.0,
+    "origin_x_m": -1.0,
+    "origin_y_m": -1.0
+  },
+  "planning": {
+    "inflation_radius_cells": 2,
+    "lookahead_m": 0.25,
+    "linear_speed_mps": 0.1
+  },
+  "zones": {
+    "receiving": {"x": 0.0, "y": 0.0},
+    "normal": {"x": 0.0, "y": 0.0},
+    "defect": {"x": 0.0, "y": 0.0}
+  }
+}
