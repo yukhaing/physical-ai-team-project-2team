@@ -12,7 +12,7 @@ Box detection and sorting
 ## Team Members
 - [하영진]   — YOLO (detection & classification)
 - [유유카인] — YOLO (detection & classification)
-- [배민지]  — OMX (robot arm control)
+- [배민서]  — OMX (robot arm control)
 - [최재현]  — OMX (robot arm control)
 
 ## Project Structure
