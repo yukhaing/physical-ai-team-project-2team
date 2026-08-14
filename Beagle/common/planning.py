@@ -183,8 +183,16 @@ def pure_pursuit_command(
         return 0.0, 0.0, -1
     target_index = lookahead_target_index(pose, path, lookahead_m, start_index=start_index)
     target_x, target_y = path[target_index]
+    # Near the end of the path there may be less than lookahead_m of path left, so
+    # lookahead_target_index saturates at the final waypoint -- the *actual* distance
+    # to that point can be much smaller than lookahead_m. The curvature law below is
+    # only correct if L is the true distance to the target, so use that instead of the
+    # nominal lookahead_m; using lookahead_m unconditionally makes the commanded turn
+    # too gentle once the target is close, and the robot orbits the goal instead of
+    # converging onto it.
+    actual_lookahead_m = max(euclidean((pose.x, pose.y), (target_x, target_y)), 1e-3)
     alpha = wrap_angle(math.atan2(target_y - pose.y, target_x - pose.x) - pose.theta)
-    omega = 2.0 * speed_mps * math.sin(alpha) / max(lookahead_m, 1e-3)
+    omega = 2.0 * speed_mps * math.sin(alpha) / actual_lookahead_m
     omega = clamp(omega, -max_omega_rps, max_omega_rps)
     adjusted_speed = speed_mps
     if abs(alpha) > 1.0:

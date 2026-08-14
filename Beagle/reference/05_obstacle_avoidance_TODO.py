@@ -14,35 +14,34 @@ import time
 from common.lidar import cardinal_distances, valid_fraction
 from common.robot import SafeBeagle
 
-EMERGENCY_MM = 100.0
-TURN_MM = 130.0
-BACKUP_CLEAR_MM = 200.0  # rear clearance required before reversing out of a jam
-TURN_MARGIN_MM = 20.0  # left/right must differ by more than this to switch turn direction
+
+EMERGENCY_MM = 130.0 #အရေးပေါ် ရပ်တန့်/နောက်ဆုတ်ရမည့် အန္တရာယ်ရှိ အကွာအဝေး
+TURN_MM = 150.0  #အတားအဆီးကို စတင် ရှောင်ကွင်း ကွေ့ရမည့် အကွာအဝေး
+CLEAR_MM = 250.0      # အတားအဆီး လုံးဝ လွတ်ကင်းသွားကြောင်း အတည်ပြုသည့် အကွာအဝေး
+BACKUP_CLEAR_MM = 70.0 #အနောက်သို့ စိတ်ချစွာ နောက်ဆုတ်နိုင်ရန် လိုအပ်သော အနောက်ဘက် နေရာလွတ်
+TURN_MARGIN_MM = 150.0 #ဘယ် သို့မဟုတ် ညာ လားရာ ရွေးချယ်ရန် လိုအပ်သည့် အနည်းဆုံး နေရာလွတ် ကွာခြားချက်
 
 _last_turn_state = "TURN_LEFT"
+_turning = False
 
 
-# def decide_state(front: float, left: float, right: float, valid_ratio: float) -> str:
-#     # TODO 1: valid_ratio < 0.5면 SENSOR_FAIL
-#     # TODO 2: front < EMERGENCY_MM면 EMERGENCY_STOP
-#     # TODO 3: front < TURN_MM이면 더 열린 쪽으로 회전
-#     # TODO 4: 그 외 FORWARD
-#     return "TODO"
-
-
-# def wheel_command(state: str) -> tuple[float, float]:
-#     # TODO: 상태별 바퀴 명령을 작성하세요.
-#     return 0.0, 0.0
-
-def decide_state(front: float, left: float, right: float, rear: float, valid_ratio: float) -> str:
-    global _last_turn_state
+def decide_state(front, left, right, rear, valid_ratio) -> str:
+    global _last_turn_state, _turning
     if valid_ratio < 0.5:
+        _turning = False
         return "SENSOR_FAIL"
     if front < EMERGENCY_MM:
+        _turning = False
         if rear > BACKUP_CLEAR_MM:
             return "BACKUP"
         return "EMERGENCY_STOP"
+    if _turning:
+        if front >= CLEAR_MM:
+            _turning = False
+        else:
+            return _last_turn_state
     if front < TURN_MM:
+        _turning = True
         if left - right > TURN_MARGIN_MM:
             _last_turn_state = "TURN_LEFT"
         elif right - left > TURN_MARGIN_MM:

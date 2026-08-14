@@ -33,7 +33,6 @@ import time
 from pathlib import Path
 import sys
 
-import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -63,6 +62,30 @@ def scene_bounds(segments: list[Segment]) -> tuple[float, float, float, float]:
     return min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad
 
 
+# ---------------------------------------------------------------- Shared plotting helpers
+
+def draw_planned_path(ax, path: list[tuple[float, float]], *, label: str = 'Planned Path') -> None:
+    """Draws the full path pure pursuit is trying to follow. Dotted + purple so it's never
+    confused with the (dashed blue) estimated trajectory or the (solid red) true trajectory."""
+    if not path:
+        return
+    px, py = zip(*path)
+    ax.plot(px, py, ':', color='#7A62F6', linewidth=2.4, alpha=0.9, label=label)
+
+
+def draw_pursuit_target(ax, robot_xy: tuple[float, float], target_xy: tuple[float, float] | None) -> None:
+    """Marks the single point on the path the controller is steering toward *right now*
+    (pure pursuit's lookahead point, or line-following's projected point), plus a thin
+    line from the robot to it, so "the path" and "what it's following this instant" are
+    visually distinct."""
+    if target_xy is None:
+        return
+    ax.plot([robot_xy[0], target_xy[0]], [robot_xy[1], target_xy[1]],
+            color='#FFC145', linewidth=1.2, alpha=0.9, zorder=4)
+    ax.plot(target_xy[0], target_xy[1], 'o', color='#FFC145', markersize=9,
+            markeredgecolor='#8A5D00', markeredgewidth=1.0, zorder=5, label='Pursuit Target')
+
+
 # ---------------------------------------------------------------- SLAM correction
 
 def scan_match(grid: OccupancyGridMap, pose: Pose2D, points_mm: list[tuple[float, float]],
@@ -76,11 +99,11 @@ def scan_match(grid: OccupancyGridMap, pose: Pose2D, points_mm: list[tuple[float
     sample = points_mm[::6]
     best = (0.0, 0.0, 0.0)
     best_score = -1e18
+    local = [(x / 1000.0, y / 1000.0) for x, y in sample]  # doesn't depend on ddeg -- hoisted out of the loop below
 
     for ddeg in np.linspace(-search_deg, search_deg, 2 * step + 1):
         dth = math.radians(float(ddeg))
         c, s = math.cos(pose.theta + dth), math.sin(pose.theta + dth)
-        local = [(x / 1000.0, y / 1000.0) for x, y in sample]
         for dx in np.linspace(-search_xy, search_xy, 2 * step + 1):
             for dy in np.linspace(-search_xy, search_xy, 2 * step + 1):
                 score = 0.0
@@ -99,6 +122,9 @@ def scan_match(grid: OccupancyGridMap, pose: Pose2D, points_mm: list[tuple[float
 # ---------------------------------------------------------------- Simulator
 
 class BeagleSimulator:
+    _RECOVER_BACK_FRAMES = 14
+    _RECOVER_TURN_FRAMES = 22
+
     def __init__(self, segments: list[Segment], start: Pose2D,
                  odom_noise: float = 0.06, use_slam: bool = False) -> None:
         self.robot = MockBeagle(scene='open')
@@ -135,7 +161,12 @@ class BeagleSimulator:
         self.auto_path: list[tuple[float, float]] = []
         self.auto_on = False
         self.goal: tuple[float, float] | None = None
+        self.pp_target_point: tuple[float, float] | None = None  # current pure-pursuit aim point, for rendering
         self._ax_world = None
+        self._replan_cooldown = 0
+        self._blocked_streak = 0
+        self._recover_frames = 0
+        self._recover_turn_dir = 1.0
 
     # ---------------- Planning grid (rasterize walls + inflate by robot size)
     def _build_plan_grid(self):
@@ -150,7 +181,7 @@ class BeagleSimulator:
             for gx, gy in bresenham(*to_cell(sx, sy), *to_cell(ex, ey)):
                 if 0 <= gx < self.grid.width and 0 <= gy < self.grid.height:
                     grid[gy, gx] = 100
-        return inflate_obstacles(grid, radius_cells=4)
+        return inflate_obstacles(grid, radius_cells=6)
 
     def _nearest_free(self, gx: int, gy: int):
         h, w = self.plan_grid.shape
@@ -263,16 +294,48 @@ class BeagleSimulator:
 
     # ---------------- Single step
     def step(self, dt: float) -> None:
-        # Autonomous driving: Pure Pursuit generates wheel commands based on the estimated pose
-        if self.auto_on and self.auto_path:
-            self._replan_cooldown = max(0, getattr(self, '_replan_cooldown', 0) - 1)
-            if self.robot.front_lidar() < 110 and self._replan_cooldown == 0 and self.goal:
-                # Path is blocked -> replan from the current position
-                print('Front blocked -> replanning path')
+        # Recovery takes priority over path following: replanning always restarts from
+        # wherever the robot currently is, so if it's frozen against a wall (collision
+        # safety below zeroes forward speed), the "new" plan is just the same path
+        # pointed the same direction -> instant re-block -> infinite replan loop.
+        # Backing up first actually changes position/heading so the next plan differs.
+        if self._recover_frames > 0:
+            self._recover_frames -= 1
+            if self._recover_frames > self._RECOVER_TURN_FRAMES:
+                self.cmd = (-14.0, -14.0)  # phase 1: straight back, away from the wall
+            else:
+                # phase 2: turn in place toward whichever side had more room when
+                # recovery started (see trigger below)
+                mag = 12.0 * self._recover_turn_dir
+                self.cmd = (-mag, mag)
+            self.status = 'RECOVER'
+            if self._recover_frames == 0 and self.goal:
+                # Replan now instead of resuming the stale pre-recovery path, which
+                # usually still routes past the same obstacle from the old approach
+                # angle and re-blocks almost immediately.
                 self.set_goal(*self.goal)
+        elif self.auto_on and self.auto_path:
+            self._replan_cooldown = max(0, self._replan_cooldown - 1)
+            front_blocked = self.robot.front_lidar() < 110
+            if not front_blocked:
+                self._blocked_streak = 0
+            elif self._replan_cooldown == 0 and self.goal:
+                # Only counts once per replan attempt (every ~40 frames), not every
+                # frame it's blocked, so this tracks "replanned N times, still stuck".
+                self._blocked_streak += 1
+                if self._blocked_streak >= 2:
+                    print('Stuck near obstacle -> backing away before replanning')
+                    self._recover_turn_dir = 1.0 if self.robot.left_lidar() >= self.robot.right_lidar() else -1.0
+                    self._recover_frames = self._RECOVER_BACK_FRAMES + self._RECOVER_TURN_FRAMES
+                    self._blocked_streak = 0
+                else:
+                    print('Front blocked -> replanning path')
+                    self.set_goal(*self.goal)
                 self._replan_cooldown = 40
-            v, omega, _ = pure_pursuit_command(
+            v, omega, target_index = pure_pursuit_command(
                 self.est_pose, self.auto_path, lookahead_m=0.15, speed_mps=0.08)
+            if 0 <= target_index < len(self.auto_path):
+                self.pp_target_point = self.auto_path[target_index]
             left_pct, right_pct = twist_to_wheel_percent(v, omega)
             self.cmd = (max(-20, min(20, left_pct)), max(-20, min(20, right_pct)))
             gx, gy = self.auto_path[-1]
@@ -280,9 +343,12 @@ class BeagleSimulator:
                 self.auto_on = False
                 self.cmd = (0.0, 0.0)
                 self.status = 'GOAL!'
+                self.pp_target_point = None
                 print('Goal reached')
             else:
                 self.status = 'AUTO'
+        else:
+            self.pp_target_point = None
 
         # Front collision protection (simulator-level safety)
         front = self.robot.front_lidar()
@@ -304,7 +370,11 @@ class BeagleSimulator:
         # LiDAR + (optional) scan matching correction + map accumulation
         scan = self.robot.lidar()
         points = polar_to_xy(scan)
-        if self.use_slam and self.frame > 20 and self.frame % 4 == 0:
+        if self.use_slam and self.frame > 20:
+            # Every frame, not every 4th: scan_match() can only pull the estimate back by
+            # at most search_xy/search_deg per call, so if true drift grows faster than that
+            # between corrections, it permanently outruns what a single call can undo. Calling
+            # it every frame keeps the per-call correction small enough to actually keep up.
             self.est_pose = scan_match(self.grid, self.est_pose, points)
         world = transform_points_mm(points, self.est_pose)
         self.grid.update_endpoints(self.est_pose, world[::3])
@@ -351,10 +421,10 @@ class BeagleSimulator:
                 wx, wy = zip(*world_true)
                 ax_world.scatter(wx, wy, s=4, color='#16C3B2', alpha=0.6)
             if self.auto_path:
-                px, py = zip(*self.auto_path)
-                ax_world.plot(px, py, '--', color='#7A62F6', linewidth=1.6, alpha=0.85, label='A* Path')
+                draw_planned_path(ax_world, self.auto_path, label='A* Path')
                 if self.goal:
                     ax_world.plot(self.goal[0], self.goal[1], '*', color='#7A62F6', markersize=15)
+            draw_pursuit_target(ax_world, (self.est_pose.x, self.est_pose.y), self.pp_target_point)
             if self.show_trails and len(self.true_trail) > 1:
                 tx, ty = zip(*self.true_trail)
                 ax_world.plot(tx, ty, color='#D9534F', linewidth=1.4, alpha=0.7, label='True Trajectory')

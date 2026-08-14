@@ -43,7 +43,6 @@ def run_editor(config: dict) -> None:
 
 def run_astar_demo(config: dict) -> None:
     import matplotlib.pyplot as plt
-    import numpy as np
     from common.mapping import inflate_obstacles, load_map_csv
     from common.planning import astar, reduce_waypoints
     map_csv = ROOT / 'data' / 'sample_map.csv'
