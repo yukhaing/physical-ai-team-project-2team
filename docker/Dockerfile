@@ -17,6 +17,22 @@ RUN cd /root/ros2_ws/src && \
     git checkout "${CYCLO_CONTROL_COMMIT}" && \
     vcs import /root/ros2_ws/src < cyclo_control_ci.repos
 
+COPY patches/cyclo_movej_s_curve.patch /tmp/cyclo_movej_s_curve.patch
+COPY patches/cyclo_movej_s_curve_feedback_hold.patch /tmp/cyclo_movej_s_curve_feedback_hold.patch
+COPY patches/cyclo_movej_s_curve_bounded_settle.patch /tmp/cyclo_movej_s_curve_bounded_settle.patch
+COPY patches/cyclo_movej_s_curve_terminal_trim.patch /tmp/cyclo_movej_s_curve_terminal_trim.patch
+COPY patches/cyclo_movej_idle_wait.patch /tmp/cyclo_movej_idle_wait.patch
+COPY patches/cyclo_movej_idle_quiet.patch /tmp/cyclo_movej_idle_quiet.patch
+RUN cd /root/ros2_ws/src/cyclo_control && \
+    git apply /tmp/cyclo_movej_s_curve.patch && \
+    git apply /tmp/cyclo_movej_s_curve_feedback_hold.patch && \
+    git apply /tmp/cyclo_movej_s_curve_bounded_settle.patch && \
+    git apply /tmp/cyclo_movej_s_curve_terminal_trim.patch
+RUN cd /root/ros2_ws/src/cyclo_control && \
+    git apply /tmp/cyclo_movej_idle_wait.patch
+RUN cd /root/ros2_ws/src/cyclo_control && \
+    git apply /tmp/cyclo_movej_idle_quiet.patch
+
 RUN apt-get update && \
     rosdep update && \
     rosdep install --from-paths /root/ros2_ws/src --ignore-src -r -y --rosdistro jazzy && \
@@ -29,6 +45,9 @@ RUN apt-get update && \
 
 RUN mkdir -p /root/omx_box_project_ws && \
     printf '%s\n' \
+      'if [ -f /root/ros2_ws/install/setup.bash ]; then' \
+      '  source /root/ros2_ws/install/setup.bash' \
+      'fi' \
       'if [ -f /root/omx_box_project_ws/install/setup.bash ]; then' \
       '  source /root/omx_box_project_ws/install/setup.bash' \
       'fi' >> /root/.bashrc && \
@@ -36,6 +55,10 @@ RUN mkdir -p /root/omx_box_project_ws && \
       "alias omx_box_build='cd /root/omx_box_project_ws && colcon build --symlink-install'" \
       "alias omx_box_source='source /root/omx_box_project_ws/install/setup.bash'" \
       >> /root/.bashrc
+
+RUN mkdir -p /root/.rviz2 && \
+    ln -sfn /root/omx_box_project_ws/install/omx_box_control/share/omx_box_control/rviz/omx_box_project.rviz \
+      /root/.rviz2/default.rviz
 
 WORKDIR /root/omx_box_project_ws
 CMD ["bash"]

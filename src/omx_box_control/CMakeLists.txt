@@ -35,7 +35,18 @@ install(TARGETS omx_target_panel
 )
 install(PROGRAMS
   scripts/box_target_pose_bridge_node.py
+  scripts/place_keyboard_teach_node.py
   scripts/camera_homography_target_node.py
+  scripts/movej_staging_node.py
+  scripts/movej_xy_approach_node.py
+  scripts/movej_closed_loop_descent_node.py
+  scripts/movej_single_ptp_descent_node.py
+  scripts/movej_loaded_lift_node.py
+  scripts/movej_place_rotate_node.py
+  scripts/gripper_open_node.py
+  scripts/movej_smooth_relay_node.py
+  scripts/pick_coordinator_node.py
+  scripts/rule_based_pick_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})

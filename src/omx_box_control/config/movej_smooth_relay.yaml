@@ -1,0 +1,16 @@
+movej_smooth_relay:
+  ros__parameters:
+    input_topic: /omx_movej_controller/movej_raw
+    output_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    max_waypoint_delta: 0.03
+    command_period: 1.0
+    waypoint_duration: 0.80
+    goal_tolerance: 0.03
+    minimum_progress: 0.001
+    progress_timeout: 3.0
+    max_feedback_jump: 0.08
+    motion_timeout: 30.0

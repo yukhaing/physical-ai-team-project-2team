@@ -32,6 +32,22 @@ omx_movej_controller:
     cbf_alpha: 5.0
     collision_buffer: 0.01
     collision_safe_distance: 0.005
+    # Optional controller-internal quintic S-curve. Set false for legacy MoveJ.
+    smooth_profile_enabled: true
+    smooth_max_velocity: 0.25
+    smooth_max_acceleration: 0.40
+    smooth_max_jerk: 1.0
+    smooth_min_duration: 1.0
+    smooth_settle_tolerance: 0.04
+    smooth_settle_timeout: 3.0
+    # Bounded software compensation for joint3 load-direction hysteresis.
+    smooth_terminal_trim_enabled: true
+    smooth_terminal_trim_stall_velocity: 0.002
+    smooth_terminal_trim_stall_time: 0.5
+    smooth_terminal_trim_rate: 0.02
+    smooth_terminal_trim_max_offset: 0.06
+    smooth_terminal_trim_timeout: 5.0
+    smooth_terminal_trim_capture_tolerance: 0.01
     base_frame: link0
     controlled_link: end_effector_link
     joint_states_topic: /joint_states

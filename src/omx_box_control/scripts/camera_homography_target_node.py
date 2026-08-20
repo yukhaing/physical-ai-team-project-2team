@@ -4,13 +4,13 @@
 import os
 import cv2
 from cv_bridge import CvBridge
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class CameraHomographyTarget(Node):
@@ -23,6 +23,15 @@ class CameraHomographyTarget(Node):
                                [0.12, -0.10, 0.28, -0.10, 0.28, 0.10, 0.12, 0.10])
         self.declare_parameter('target_pose_topic', '/camera_box_target')
         self.declare_parameter('marker_topic', '/camera_box_marker')
+        self.declare_parameter('workspace_marker_topic', '/camera_workspace_markers')
+        self.declare_parameter('workspace_grid_resolution', 0.01)
+        # Effective radius is measured from the joint1 axis including the
+        # calibrated FK X bias: center X = -0.01125 + 0.00126 = -0.00999m.
+        self.declare_parameter('workspace_center_x', -0.00999)
+        self.declare_parameter('workspace_center_y', 0.0)
+        self.declare_parameter('safe_reach_radius', 0.280)
+        self.declare_parameter('warning_reach_radius', 0.285)
+        self.declare_parameter('workspace_marker_z', 0.002)
         self.declare_parameter('calibration_file', '/tmp/omx_camera_homography.yaml')
         self.declare_parameter('show_window', True)
         flat = list(self.get_parameter('reference_points_link0').value)
@@ -47,9 +56,12 @@ class CameraHomographyTarget(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.marker_pub = self.create_publisher(
             Marker, str(self.get_parameter('marker_topic').value), marker_qos)
+        self.workspace_pub = self.create_publisher(
+            MarkerArray, str(self.get_parameter('workspace_marker_topic').value), marker_qos)
         self.image_sub = self.create_subscription(
             Image, str(self.get_parameter('image_topic').value), self.image_callback, 10)
         self.load_calibration()
+        self.publish_workspace_markers()
         if self.show_window:
             cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
             cv2.setMouseCallback(self.window_name, self.mouse_callback)
@@ -111,11 +123,74 @@ class CameraHomographyTarget(Node):
         marker.ns, marker.id = 'camera_box_target', 0
         marker.type, marker.action = Marker.SPHERE, Marker.ADD
         marker.scale.x = marker.scale.y = marker.scale.z = 0.025
-        marker.color.r, marker.color.g, marker.color.a = 1.0, 0.3, 1.0
+        zone, color = self.workspace_zone(float(x), float(y))
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color
         self.marker_pub.publish(marker)
         self.get_logger().info(
             f'pixel=({pixel_x}, {pixel_y}) -> {self.base_frame}: '
-            f'x={x:.3f}, y={y:.3f}, z={self.target_z:.3f} (preview only)')
+            f'x={x:.3f}, y={y:.3f}, z={self.target_z:.3f}, zone={zone} '
+            '(preview only)')
+
+    def workspace_zone(self, x, y):
+        center_x = float(self.get_parameter('workspace_center_x').value)
+        center_y = float(self.get_parameter('workspace_center_y').value)
+        radius = float(np.hypot(x - center_x, y - center_y))
+        if radius <= float(self.get_parameter('safe_reach_radius').value):
+            return 'safe', (0.10, 0.85, 0.20, 1.0)
+        if radius <= float(self.get_parameter('warning_reach_radius').value):
+            return 'caution', (1.0, 0.75, 0.05, 1.0)
+        return 'risk', (1.0, 0.10, 0.05, 1.0)
+
+    def publish_workspace_markers(self):
+        resolution = float(self.get_parameter('workspace_grid_resolution').value)
+        if resolution <= 0.0:
+            raise ValueError('workspace_grid_resolution must be positive')
+        z = float(self.get_parameter('workspace_marker_z').value)
+        minimum = np.min(self.reference_points, axis=0)
+        maximum = np.max(self.reference_points, axis=0)
+        cells = {'safe': [], 'caution': [], 'risk': []}
+        for x in np.arange(minimum[0] + resolution / 2.0, maximum[0], resolution):
+            for y in np.arange(minimum[1] + resolution / 2.0, maximum[1], resolution):
+                zone, _color = self.workspace_zone(float(x), float(y))
+                cells[zone].append(Point(x=float(x), y=float(y), z=z))
+
+        colors = {
+            'safe': (0.10, 0.85, 0.20, 0.16),
+            'caution': (1.0, 0.75, 0.05, 0.28),
+            'risk': (1.0, 0.10, 0.05, 0.36),
+        }
+        array = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+        for identifier, zone in enumerate(('safe', 'caution', 'risk')):
+            marker = Marker()
+            marker.header.stamp, marker.header.frame_id = stamp, self.base_frame
+            marker.ns, marker.id = 'pick_workspace_grid', identifier
+            marker.type, marker.action = Marker.CUBE_LIST, Marker.ADD
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = marker.scale.y = resolution * 0.94
+            marker.scale.z = 0.001
+            marker.color.r, marker.color.g, marker.color.b, marker.color.a = colors[zone]
+            marker.points = cells[zone]
+            array.markers.append(marker)
+
+        legend = Marker()
+        legend.header.stamp, legend.header.frame_id = stamp, self.base_frame
+        legend.ns, legend.id = 'pick_workspace_grid', 10
+        legend.type, legend.action = Marker.TEXT_VIEW_FACING, Marker.ADD
+        legend.pose.position.x = float(minimum[0])
+        legend.pose.position.y = float(maximum[1]) + 0.018
+        legend.pose.position.z = z + 0.01
+        legend.pose.orientation.w = 1.0
+        legend.scale.z = 0.014
+        legend.color.r = legend.color.g = legend.color.b = legend.color.a = 1.0
+        legend.text = 'Pick IK: green=safe  yellow=caution  red=risk'
+        array.markers.append(legend)
+        self.workspace_pub.publish(array)
+        self.get_logger().info(
+            f'Published pick workspace grid: safe <= '
+            f'{float(self.get_parameter("safe_reach_radius").value)*1000:.0f}mm, '
+            f'caution <= '
+            f'{float(self.get_parameter("warning_reach_radius").value)*1000:.0f}mm')
 
     def display_image(self):
         if self.latest_image is None:

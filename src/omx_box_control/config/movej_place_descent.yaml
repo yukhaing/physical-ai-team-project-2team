@@ -1,0 +1,69 @@
+movej_place_descent:
+  ros__parameters:
+    target_topic: /camera_box_target
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    base_frame: link0
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    require_staging: false
+    require_start_at_target: true
+    start_xy_tolerance: 0.015
+    start_min_z: 0.043
+    require_start_pitch: true
+    start_min_pitch: 1.047197551
+    start_max_pitch: 1.605702912
+    use_target_z: true
+    # Release 10mm above the revised 40mm pick target.
+    target_z: 0.042
+    z_tolerance: 0.001
+    z_weight: 20000.0
+    # The 2026-08-07 place trial confirmed that about 103.6mm is sufficient.
+    min_path_z: 0.035
+    min_final_z: 0.035
+    min_pitch: 1.047197551
+    max_pitch: 1.605702912
+    preferred_pitch: 1.196500000
+    pitch_weight: 2.0
+    path_samples: 51
+    max_xy_error: 0.006
+    target_max_age: 30.0
+    # Match the measured place teaching point at X=23.47mm.
+    min_x: 0.015
+    max_x: 0.32
+    max_abs_y: 0.25
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    xy_weight: 20000.0
+    joint_delta_weight: 100.0
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    target_z_min: 0.040
+    # Physical steps drop about 12-17mm; accept a safe near-target pose instead
+    # of commanding another step from 46-50mm and overshooting below the band.
+    target_z_max: 0.050
+    # Reduce the commanded increment after a 1mm plan produced an 18.4mm drop.
+    planned_step: 0.00005
+    max_steps: 8
+    # The accepted physical step was 19.4mm from the 123mm transfer pose.
+    max_actual_step: 0.018
+    minimum_actual_progress: 0.0002
+    max_pitch_step: 0.104719755
+    gripper_joint_name: gripper_joint_1
+    # Loaded place descent; the physical grasp was confirmed at 0.044-0.054rad.
+    minimum_open_position: 0.005
+    move_duration: 5.0
+    minimum_completion_time: 6.0
+    fast_above_target_margin: 0.025
+    fast_move_duration: 3.5
+    fast_minimum_completion_time: 4.5
+    joint_tolerance: 0.04
+    settle_time: 0.30
+    timeout: 15.0
+    single_step_mode: false
+    # Loaded descent is accepted from measured FK after the bounded profile,
+    # even when joint-space hysteresis leaves a residual tracking error.
+    cartesian_completion_enabled: true

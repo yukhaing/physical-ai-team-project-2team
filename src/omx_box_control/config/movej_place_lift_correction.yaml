@@ -1,0 +1,45 @@
+movej_place_lift_correction:
+  ros__parameters:
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    use_target_z: true
+    target_z: 0.129
+    z_tolerance: 0.0005
+    z_weight: 20000.0
+    min_path_z: 0.110
+    min_final_z: 0.120
+    min_pitch: -3.14159
+    max_pitch: 3.14159
+    preferred_pitch: 0.0
+    pitch_weight: 0.0
+    xy_weight: 20000.0
+    joint_delta_weight: 100.0
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    path_samples: 51
+    gripper_joint_name: gripper_joint_1
+    min_grasp_position: 0.05
+    max_grasp_position: 0.70
+    max_gripper_change: 0.05
+    min_start_z: 0.110
+    max_start_z: 0.125
+    min_completed_z: 0.120
+    max_completed_z: 0.135
+    min_actual_rise: 0.002
+    max_actual_rise: 0.020
+    max_command_xy_shift: 0.005
+    max_actual_xy_shift: 0.005
+    max_path_drop: 0.001
+    max_command_z: 0.160
+    joint_goal_compensation: [0.0, -0.06, -0.04, 0.0, 0.0]
+    move_duration: 6.0
+    minimum_completion_time: 12.0
+    settle_time: 0.30
+    timeout: 16.0

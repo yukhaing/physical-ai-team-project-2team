@@ -3,4 +3,6 @@ install/
 log/
 __pycache__/
 *.pyc
+*.orig
+*.rej
 calibration/*.yaml

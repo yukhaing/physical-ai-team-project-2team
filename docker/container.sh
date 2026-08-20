@@ -15,7 +15,7 @@ case "${1:-}" in
     ;;
   start)
     if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
-      xhost +local:docker >/dev/null || true
+      xhost +si:localuser:root >/dev/null || true
     fi
     docker compose -f "${COMPOSE_FILE}" up -d --build
     ;;
@@ -24,6 +24,9 @@ case "${1:-}" in
     ;;
   stop)
     docker compose -f "${COMPOSE_FILE}" down
+    if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
+      xhost -si:localuser:root >/dev/null || true
+    fi
     ;;
   logs)
     docker compose -f "${COMPOSE_FILE}" logs -f

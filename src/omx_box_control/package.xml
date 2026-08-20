@@ -8,16 +8,22 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>action_msgs</exec_depend>
   <depend>geometry_msgs</depend>
+  <exec_depend>control_msgs</exec_depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rviz_common</depend>
   <depend>visualization_msgs</depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>robotis_interfaces</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
 
   <export>
     <rviz plugin="${prefix}/plugin_description.xml"/>

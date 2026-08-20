@@ -1,0 +1,48 @@
+movej_descent_step:
+  ros__parameters:
+    target_topic: /camera_box_target
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    base_frame: link0
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    staging_positions: [0.0, -0.532389, 0.334964, 1.303389, 0.0]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    require_staging: false
+    require_start_at_target: true
+    start_xy_tolerance: 0.010
+    start_min_z: 0.13
+    require_start_pitch: true
+    start_min_pitch: 1.221730476
+    start_max_pitch: 1.396263402
+    # First hardware-validation step: descend only 5 mm from the nominal
+    # 0.140 m pregrasp.  The extra margin accounts for the previously observed
+    # joint-tracking/FK discrepancy before allowing any lower target.
+    min_path_z: 0.135
+    min_final_z: 0.134
+    use_target_z: true
+    target_z: 0.135
+    z_tolerance: 0.001
+    z_weight: 20000.0
+    min_pitch: 1.221730476
+    max_pitch: 1.396263402
+    preferred_pitch: 1.308996939
+    pitch_weight: 2.0
+    path_samples: 51
+    max_xy_error: 0.005
+    target_max_age: 30.0
+    min_x: 0.08
+    max_x: 0.32
+    max_abs_y: 0.25
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    xy_weight: 20000.0
+    joint_delta_weight: 0.02
+    height_reward: 0.0
+    move_duration: 6.0
+    minimum_completion_time: 6.0
+    joint_tolerance: 0.03
+    settle_time: 0.30
+    timeout: 15.0
