@@ -22,7 +22,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="실물 없이 이 스크립트 자체만 점검")
     parser.add_argument("--scene", default="obstacles", help="--dry-run일 때만 사용되는 가상 장면")
-    parser.add_argument("--speed", type=float, default=10.0, help="바퀴 속도(%%), 10~15 권장")
+    parser.add_argument("--speed", type=float, default=20.0, help="바퀴 속도(%%), 10~15 권장")
     parser.add_argument("--duration", type=float, default=3.0, help="최대 주행 시간(초)")
     parser.add_argument("--stop-mm", type=float, default=300.0, help="전방이 이 거리보다 가까워지면 즉시 정지")
     args = parser.parse_args()

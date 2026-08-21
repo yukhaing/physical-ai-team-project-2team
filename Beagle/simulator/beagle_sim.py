@@ -38,9 +38,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.beagle_safe import MockBeagle, build_scene, Segment  # noqa: E402
-from common.geometry import Pose2D, integrate_differential_drive, polar_to_xy, transform_points_mm, twist_to_wheel_percent, wheel_percent_to_mps  # noqa: E402
+from common.geometry import Pose2D, integrate_differential_drive, integrate_wheel_distances, polar_to_xy, transform_points_mm, twist_to_wheel_percent, wheel_percent_to_mps  # noqa: E402
 from common.mapping import GridMeta, OccupancyGridMap, bresenham, inflate_obstacles  # noqa: E402
+from common.motion import calibrate_gyro_bias  # noqa: E402
 from common.planning import astar, grid_path_to_world, pure_pursuit_command, reduce_waypoints  # noqa: E402
+from common.robot import ENCODER_M_PER_COUNT_LEFT, ENCODER_M_PER_COUNT_RIGHT, SafeBeagle  # noqa: E402
 
 
 # ---------------------------------------------------------------- Map loading
@@ -126,10 +128,24 @@ class BeagleSimulator:
     _RECOVER_TURN_FRAMES = 22
 
     def __init__(self, segments: list[Segment], start: Pose2D,
-                 odom_noise: float = 0.06, use_slam: bool = False) -> None:
-        self.robot = MockBeagle(scene='open')
-        self.robot.segments = segments
-        self.robot.pose = Pose2D(start.x, start.y, start.theta)
+                 odom_noise: float = 0.06, use_slam: bool = False, dry_run: bool = True) -> None:
+        self.dry_run = dry_run
+        if dry_run:
+            self.robot = MockBeagle(scene='open')
+            self.robot.segments = segments
+            self.robot.pose = Pose2D(start.x, start.y, start.theta)
+        else:
+            # 실물 로봇 -- ground truth 위치가 없으므로 self.robot.pose는 매 step()마다
+            # est_pose를 그대로 미러링합니다 (아래에서 설정). 그래서 이 파일의 나머지
+            # 코드(true_trail, ax_world.plot(self.robot.pose...) 등)는 dry-run 여부와
+            # 상관없이 그대로 동작합니다.
+            self.robot = SafeBeagle(dry_run=False, scene='open', max_speed=25)
+            self.robot.start_lidar()
+            self.robot.wait_until_lidar_ready()
+            self.robot.pose = Pose2D(start.x, start.y, start.theta)
+            self._prev_left_count = self.robot.left_encoder()
+            self._prev_right_count = self.robot.right_encoder()
+            self._gyro_bias = calibrate_gyro_bias(self.robot)
         self.segments = segments
         self.odom_noise = odom_noise
         self.use_slam = use_slam
@@ -181,7 +197,12 @@ class BeagleSimulator:
             for gx, gy in bresenham(*to_cell(sx, sy), *to_cell(ex, ey)):
                 if 0 <= gx < self.grid.width and 0 <= gy < self.grid.height:
                     grid[gy, gx] = 100
-        return inflate_obstacles(grid, radius_cells=6)
+        # radius_cells=6 (18cm at 0.03m resolution) was sized for the old 2.4x2.4m room.
+        # In the real 0.9x0.7m room, zones sit ~10cm from the walls, so that much inflation
+        # swallows the start/receiving corner entirely and displaces the planned path's
+        # start point ~17cm from the robot's true position. radius_cells=2 (6cm) keeps the
+        # path starting exactly where the robot actually is.
+        return inflate_obstacles(grid, radius_cells=2)
 
     def _nearest_free(self, gx: int, gy: int):
         h, w = self.plan_grid.shape
@@ -332,14 +353,21 @@ class BeagleSimulator:
                     print('Front blocked -> replanning path')
                     self.set_goal(*self.goal)
                 self._replan_cooldown = 40
+            # lookahead_m=0.30 / speed_mps=0.11 were sized for the old 2.4x2.4m room -- 0.11 m/s
+            # alone is ~34% wheel command (wheel_percent_to_mps(100%)=0.324 m/s), already over the
+            # 25% safety ceiling before the clamp below even applies, and a 30cm lookahead is a
+            # third of the new 0.9x0.7m room's width. Scaled down to stay in the 10~15% range and
+            # keep the lookahead proportional to the smaller room.
             v, omega, target_index = pure_pursuit_command(
-                self.est_pose, self.auto_path, lookahead_m=0.15, speed_mps=0.08)
+                self.est_pose, self.auto_path, lookahead_m=0.12, speed_mps=0.05)
             if 0 <= target_index < len(self.auto_path):
                 self.pp_target_point = self.auto_path[target_index]
             left_pct, right_pct = twist_to_wheel_percent(v, omega)
-            self.cmd = (max(-20, min(20, left_pct)), max(-20, min(20, right_pct)))
+            self.cmd = (max(-15, min(15, left_pct)), max(-15, min(15, right_pct)))
             gx, gy = self.auto_path[-1]
-            if math.hypot(self.est_pose.x - gx, self.est_pose.y - gy) < 0.08:
+            # 0.08 (8cm) was nearly as big as the 21cm zone's own half-width (10.5cm), so it
+            # accepted "near the edge" as arrived instead of driving to the actual center.
+            if math.hypot(self.est_pose.x - gx, self.est_pose.y - gy) < 0.03:
                 self.auto_on = False
                 self.cmd = (0.0, 0.0)
                 self.status = 'GOAL!'
@@ -358,14 +386,29 @@ class BeagleSimulator:
             self.status = 'BLOCKED'
         self.robot.wheels(left_cmd, right_cmd)
 
-        # Noisy odometry (estimated pose drifts, just like on the real robot)
-        # Applies both bias (systematic error) and instantaneous jitter together.
-        jitter = self.odom_noise * 0.3
-        left_mps = wheel_percent_to_mps(left_cmd) * (self.bias_left + random.gauss(0.0, jitter))
-        right_mps = wheel_percent_to_mps(right_cmd) * (self.bias_right + random.gauss(0.0, jitter))
-        gyro = self.robot.gyroscope_z() + self.gyro_bias_dps + random.gauss(0.0, 1.0)
-        self.est_pose = integrate_differential_drive(
-            self.est_pose, left_mps, right_mps, dt, gyro_z_dps=gyro)
+        if self.dry_run:
+            # Noisy odometry (estimated pose drifts, just like on the real robot)
+            # Applies both bias (systematic error) and instantaneous jitter together.
+            jitter = self.odom_noise * 0.3
+            left_mps = wheel_percent_to_mps(left_cmd) * (self.bias_left + random.gauss(0.0, jitter))
+            right_mps = wheel_percent_to_mps(right_cmd) * (self.bias_right + random.gauss(0.0, jitter))
+            gyro = self.robot.gyroscope_z() + self.gyro_bias_dps + random.gauss(0.0, 1.0)
+            self.est_pose = integrate_differential_drive(
+                self.est_pose, left_mps, right_mps, dt, gyro_z_dps=gyro)
+        else:
+            # 실물: 진짜 엔코더 raw count + 자이로로 dead reckoning (노이즈를 흉내낼 필요 없음 --
+            # 실제 센서 자체가 이미 노이즈를 포함하고 있음).
+            left_count = self.robot.left_encoder()
+            right_count = self.robot.right_encoder()
+            delta_left_m = (left_count - self._prev_left_count) * ENCODER_M_PER_COUNT_LEFT
+            delta_right_m = (right_count - self._prev_right_count) * ENCODER_M_PER_COUNT_RIGHT
+            self._prev_left_count = left_count
+            self._prev_right_count = right_count
+            gyro_delta_rad = math.radians((self.robot.gyroscope_z() - self._gyro_bias) * dt)
+            self.est_pose = integrate_wheel_distances(
+                self.est_pose, delta_left_m, delta_right_m, wheel_base_m=0.0956, gyro_delta_rad=gyro_delta_rad
+            )
+            self.robot.pose = self.est_pose  # ground truth 없음 -- 추정치를 그대로 미러링
 
         # LiDAR + (optional) scan matching correction + map accumulation
         scan = self.robot.lidar()

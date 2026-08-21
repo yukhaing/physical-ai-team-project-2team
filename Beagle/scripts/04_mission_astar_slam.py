@@ -17,8 +17,16 @@ Receiving zone, 우하단 Start)에 맞췄습니다. 각 zone은 점이 아니�
 사각형(ZONE_SIZE)으로 그려서 로봇이 그 안에 실제로 들어갔는지 눈으로 바로
 확인할 수 있습니다("앞에 멈춤"과 "안에 들어감"을 구분하기 위함).
 목적지(정상/불량 zone)에 도착하면 5초간 대기 후 자동으로 복귀합니다.
+
+--dry-run 플래그로 시뮬레이션과 실물을 전환합니다 (코드 주석 처리 없이).
+  --dry-run 있음: 지금까지와 동일한 시뮬레이션 (MockBeagle) + 시각화.
+  --dry-run 없음: 실물 로봇(COM 포트)에 연결해서 실제로 주행하면서, 같은 창에
+    실시간으로 위치를 보여줍니다. 실물은 ground truth가 없으므로 True/Estimated
+    Trajectory가 같은 선으로 겹쳐 보입니다 (beagle_sim.py의 BeagleSimulator가
+    dry_run=False일 때 추정 위치를 그대로 미러링하기 때문).
 """
 
+import argparse
 import math
 import time
 
@@ -32,12 +40,12 @@ from common.motion import align_to_heading_command
 from common.robot import rectangle_segments
 from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursuit_target
 
-ZONE_SIZE = 0.6  # 각 zone 사각형의 한 변 길이(m) -- 0.4는 실측 위치오차(26~31cm)보다 작아서 0.6으로 여유를 둠
+ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (2.1, 0.3),
-    "receiving": (0.9, 0.3),
-    "normal": (0.3, 2.1),
-    "defect": (2.1, 2.1),
+    "start": (0.795, 0.105),
+    "receiving": (0.26, 0.105),
+    "normal": (0.105, 0.595),
+    "defect": (0.795, 0.595),
 }
 ZONE_COLORS = {
     "start": "#16C3B2",
@@ -45,7 +53,7 @@ ZONE_COLORS = {
     "normal": "#3B4CCA",
     "defect": "#D0021B",
 }
-ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 2.4, 2.4)  # 실제 방 치수로 나중에 교체
+ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
 
 
 def draw_zones(ax) -> None:
@@ -60,14 +68,21 @@ def draw_zones(ax) -> None:
 
 
 def main() -> None:
-    sim = BeagleSimulator(ROOM_BOUNDARY, Pose2D(*ZONES["start"], math.pi), odom_noise=0.06, use_slam=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    sim = BeagleSimulator(
+        ROOM_BOUNDARY, Pose2D(*ZONES["start"], math.pi),
+        odom_noise=0.06, use_slam=True, dry_run=args.dry_run,
+    )
     mission = Mission(zones=ZONES)
     server = TriggerServer(host="0.0.0.0", port=8765)
     server.start()
 
     plt.ion()
     fig, ax = plt.subplots(figsize=(7, 7))
-    fig.canvas.manager.set_window_title("Mission Test (astar)")
+    fig.canvas.manager.set_window_title("Mission Test (astar+slam)")
 
     running = {"value": True}
 
@@ -149,12 +164,16 @@ def main() -> None:
             box_tag = f" ({mission.box_class})" if mission.box_class else ""
             dwell_tag = f" | waiting {mission.dwell_remaining():.1f}s" if mission.state == "AT_DESTINATION" else ""
             phase_tag = f" [{leg_phase}]" if mission.target_zone() is not None else ""
-            ax.set_title(f"Mission: {mission.state}{box_tag}{dwell_tag}{phase_tag} | listening on :8765 | Q=quit")
+            mode_tag = "DRY-RUN" if args.dry_run else "REAL"
+            ax.set_title(
+                f"Mission: {mission.state}{box_tag}{dwell_tag}{phase_tag} | {mode_tag} | listening on :8765 | Q=quit"
+            )
             ax.legend(loc="lower left", fontsize=8)
             fig.canvas.draw_idle()
             plt.pause(0.03)
     finally:
         server.stop()
+        sim.robot.stop()
 
     plt.ioff()
     if plt.fignum_exists(fig.number):

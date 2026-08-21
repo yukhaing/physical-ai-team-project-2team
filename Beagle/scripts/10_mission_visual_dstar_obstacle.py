@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 하나 두고 D* Lite가 그 주변으로 실제로 돌아가는지 확인합니다. 08은 그대로 두고
 (장애물 없는 기준선), 이 파일만 장애물 버전입니다.
 
-장애물 3개: 중앙 세로벽(위/아래 0.6m 틈) + 좌측/우측 중간 높이의 짧은 가로벽.
+장애물: 아래쪽 벽에 붙은 중앙 기둥 (x=0.45, y=0~0.30). 90cm x 70cm 실측 방 치수에
+맞춘 크기입니다 (09_mission_visual_astar_obstacle.py와 동일).
 
 이 파일은 sim.auto_on을 쓰지 않고 직접 pure_pursuit_wheels()로 주행하므로
 beagle_sim.py의 자체 복구 로직이 적용되지 않습니다 -- 그래서 여기에 같은 방식
@@ -33,12 +34,12 @@ from common.planning import grid_path_to_world, pure_pursuit_wheels, reduce_wayp
 from common.robot import rectangle_segments
 from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursuit_target
 
-ZONE_SIZE = 0.6
+ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (2.1, 0.3),
-    "receiving": (0.9, 0.3),
-    "normal": (0.3, 2.1),
-    "defect": (2.1, 2.1),
+    "start": (0.795, 0.105),
+    "receiving": (0.26, 0.105),
+    "normal": (0.105, 0.595),
+    "defect": (0.795, 0.595),
 }
 ZONE_COLORS = {
     "start": "#16C3B2",
@@ -46,13 +47,11 @@ ZONE_COLORS = {
     "normal": "#3B4CCA",
     "defect": "#D0021B",
 }
-ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 2.4, 2.4)
+ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
 OBSTACLE = [
-    (1.2, 0.6, 1.2, 1.8),  # 중앙 세로벽 (위/아래 0.6m씩 틈, 1개짜리 테스트에서 이미 검증됨)
-    # 09_mission_visual_astar_obstacle.py와 동일한 이유로 중앙벽에 붙임 (원래 위치는
-    # 양쪽 다 팽창 후 약 26cm로 좁아져서, 무노이즈로도 영원히 좌우 진동했다).
-    (1.2, 0.9, 1.5, 0.9),  # 우측 기둥 (중앙벽에 붙임 -> 오른쪽 벽까지 넓게 열린 통로로 우회)
-    (0.9, 1.5, 1.2, 1.5),  # 좌측 기둥 (중앙벽에 붙임 -> 왼쪽 벽까지 넓게 열린 통로로 우회)
+    # 아래쪽 벽에 붙은 기둥. start<->receiving 직선 경로와 receiving<->defect 대각선을
+    # 막아서 y>0.30 쪽으로 돌아가게 만듭니다 (09_mission_visual_astar_obstacle.py와 동일).
+    (0.45, 0.0, 0.45, 0.30),
 ]
 SEGMENTS = ROOM_BOUNDARY + OBSTACLE
 PORT = 8769
@@ -206,7 +205,7 @@ def main() -> None:
                     sim.cmd = (0.0, 0.0)
                 else:
                     left, right, path_index = pure_pursuit_wheels(
-                        sim.est_pose, path, lookahead_m=0.15, speed_mps=0.08, start_index=max(0, path_index - 1)
+                        sim.est_pose, path, lookahead_m=0.30, speed_mps=0.08, start_index=max(0, path_index - 1)
                     )
                     if 0 <= path_index < len(path):
                         pp_target_point = path[path_index]

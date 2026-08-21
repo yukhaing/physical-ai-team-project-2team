@@ -5,11 +5,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-"""scripts\\04_mission_visual.py와 완전히 동일하지만, 방 중앙에 벽(장애물)을 하나 두고
+"""scripts\\04_mission_astar_slam.py와 완전히 동일하지만, 방 중앙에 벽(장애물)을 하나 두고
 A*가 그 주변으로 실제로 돌아가는지 확인합니다. 04는 그대로 두고(장애물 없는 기준선),
 이 파일만 장애물 버전입니다.
 
-장애물 3개: 중앙 세로벽(위/아래 0.6m 틈) + 좌측/우측 중간 높이의 짧은 가로벽.
+장애물: 아래쪽 벽에 붙은 중앙 기둥 (x=0.45, y=0~0.30). start<->receiving 직선 경로(y=0.105)와
+receiving<->defect 대각선 경로를 막아서 위쪽(y>0.30)으로 돌아가게 합니다. 90cm x 70cm 실측
+방 치수에 맞춘 크기입니다.
 막히면(전방 LiDAR 근접이 일정 시간 지속) beagle_sim.py의 step()에 이미 있는
 backup-turn-replan 복구 로직이 sim.auto_on을 통해 그대로 적용됩니다(이 파일은
 sim.set_goal()에 실제 주행을 맡기므로 별도 복구 코드가 필요 없습니다).
@@ -30,29 +32,25 @@ from common.motion import align_to_heading_command
 from common.robot import rectangle_segments
 from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursuit_target
 
-ZONE_SIZE = 0.6
+ZONE_SIZE = 0.21
 ZONES = {
-    "start": (2.1, 0.3),
-    "receiving": (0.9, 0.3),
-    "normal": (0.3, 2.1),
-    "defect": (2.1, 2.1),
+    "start": (0.795, 0.105),
+    "receiving": (0.26, 0.105),
+    "normal": (0.105, 0.595),
+    "defect": (0.795,0.595),
 }
 ZONE_COLORS = {
-    "start": "#16C3B2",
+    "start": "#F5A623",
     "receiving": "#F5A623",
-    "normal": "#3B4CCA",
+    "normal": "#18DF39",
     "defect": "#D0021B",
 }
-ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 2.4, 2.4)
+ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
 OBSTACLE = [
-    (1.2, 0.6, 1.2, 1.8),  # 중앙 세로벽 (위/아래 0.6m씩 틈, 1개짜리 테스트에서 이미 검증됨)
-    # 우측/좌측 기둥: 중앙벽에 붙여서 한쪽으로만 우회하게 함. 원래는 중앙벽과 바깥벽 사이
-    # 한가운데 떠 있어서 양쪽 다 팽창 후 약 26cm로 좁아졌었다 -- front-blocked(110mm) 문턱을
-    # 벗어날 만큼 안 넓어서, 완벽한(무노이즈) 위치추정으로도 둘 중 하나로 확실히 커밋 못 하고
-    # 영원히 좌우 진동(막힘->재계획->막힘)했다. 중앙벽에 붙이면 넓게 열린 쪽 하나로만
-    # 명확하게 우회하게 되면서 팽창 후에도 약 66cm 여유가 남는다.
-    (1.2, 0.9, 1.5, 0.9),  # 우측 기둥 (중앙벽에 붙임 -> 오른쪽 벽까지 넓게 열린 통로로 우회)
-    (0.9, 1.5, 1.2, 1.5),  # 좌측 기둥 (중앙벽에 붙임 -> 왼쪽 벽까지 넓게 열린 통로로 우회)
+    # 아래쪽 벽에 붙은 기둥. start(0.795,0.105)<->receiving(0.26,0.105) 직선 경로와
+    # receiving<->defect 대각선을 막아서 y>0.30 쪽으로 돌아가게 만듭니다. 위로 0.40m
+    # 여유가 남아서(방 높이 0.70m 기준) 팽창 후에도 충분히 넓은 통로가 유지됩니다.
+    (0.45, 0.0, 0.45, 0.30),
 ]
 SEGMENTS = ROOM_BOUNDARY + OBSTACLE
 PORT = 8768

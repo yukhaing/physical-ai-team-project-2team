@@ -29,8 +29,9 @@
     "linear_speed_mps": 0.1
   },
   "zones": {
-    "receiving": {"x": 0.0, "y": 0.0},
-    "normal": {"x": 0.0, "y": 0.0},
-    "defect": {"x": 0.0, "y": 0.0}
+    "start": {"x": 0.795, "y": 0.105},
+    "receiving": {"x": 0.26, "y": 0.105},
+    "normal": {"x": 0.105, "y": 0.595},
+    "defect": {"x": 0.795, "y": 0.595}
   }
 }

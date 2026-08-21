@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 이동 방법: D* Lite (common/dstar_lite.py) + pure_pursuit_wheels(). beagle_sim.py의
 set_goal()(A* 사용)을 거치지 않고, sim.plan_grid를 직접 재사용해 D* Lite로 경로를
 계획하고 수동으로 추종합니다. 같은 미션을 A*/line-following으로 돌려보려면
-scripts\\04_mission_visual.py / scripts\\07_mission_visual_line.py를 실행하세요.
+scripts\\04_mission_astar_slam.py / scripts\\07_mission_visual_line.py를 실행하세요.
 
 방 배치는 실제 코스 그림(정사각형 방, 좌상단 Normal, 우상단 Defect, 하단 중앙
 Receiving zone, 우하단 Start)에 맞췄습니다. 각 zone은 점이 아니라 실제 크기의
@@ -37,12 +37,12 @@ from common.planning import grid_path_to_world, pure_pursuit_wheels, reduce_wayp
 from common.robot import rectangle_segments
 from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursuit_target
 
-ZONE_SIZE = 0.6  # 각 zone 사각형의 한 변 길이(m) -- 0.4는 실측 위치오차(26~31cm)보다 작아서 0.6으로 여유를 둠
+ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (2.1, 0.3),
-    "receiving": (0.9, 0.3),
-    "normal": (0.3, 2.1),
-    "defect": (2.1, 2.1),
+    "start": (0.795, 0.105),
+    "receiving": (0.26, 0.105),
+    "normal": (0.105, 0.595),
+    "defect": (0.795, 0.595),
 }
 ZONE_COLORS = {
     "start": "#16C3B2",
@@ -50,7 +50,7 @@ ZONE_COLORS = {
     "normal": "#3B4CCA",
     "defect": "#D0021B",
 }
-ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 2.4, 2.4)  # 실제 방 치수로 나중에 교체
+ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
 PORT = 8767
 
 
@@ -166,7 +166,7 @@ def main() -> None:
                     leg_phase = "TRACKING"
             elif path:
                 left, right, path_index = pure_pursuit_wheels(
-                    sim.est_pose, path, lookahead_m=0.15, speed_mps=0.08, start_index=max(0, path_index - 1)
+                    sim.est_pose, path, lookahead_m=0.30, speed_mps=0.08, start_index=max(0, path_index - 1)
                 )
                 if 0 <= path_index < len(path):
                     pp_target_point = path[path_index]

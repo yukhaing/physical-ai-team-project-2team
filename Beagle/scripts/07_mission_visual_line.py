@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 이동 방법: line_follow_command() -- 각 leg의 시작점(그 시점의 est_pose) -> 목표점을 잇는
 직선을 따라가는 line-following(Stanley 조향) 방식입니다. A*/경로 계획은 사용하지 않습니다.
-같은 미션을 A*+pure pursuit으로 돌려보려면 scripts\\04_mission_visual.py를 실행하세요.
+같은 미션을 A*+pure pursuit으로 돌려보려면 scripts\\04_mission_astar_slam.py를 실행하세요.
 
 방 배치는 실제 코스 그림(정사각형 방, 좌상단 Normal, 우상단 Defect, 하단 중앙
 Receiving zone, 우하단 Start)에 맞췄습니다. 각 zone은 점이 아니라 실제 크기의
@@ -49,12 +49,12 @@ def closest_point_on_segment(
     t = max(0.0, min(1.0, t))
     return (seg_start[0] + t * dx, seg_start[1] + t * dy)
 
-ZONE_SIZE = 0.6  # 각 zone 사각형의 한 변 길이(m) -- 0.4는 실측 위치오차(26~31cm)보다 작아서 0.6으로 여유를 둠
+ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (2.1, 0.3),
-    "receiving": (0.9, 0.3),
-    "normal": (0.3, 2.1),
-    "defect": (2.1, 2.1),
+    "start": (0.795, 0.105),
+    "receiving": (0.26, 0.105),
+    "normal": (0.105, 0.595),
+    "defect": (0.795, 0.595),
 }
 ZONE_COLORS = {
     "start": "#16C3B2",
@@ -62,7 +62,7 @@ ZONE_COLORS = {
     "normal": "#3B4CCA",
     "defect": "#D0021B",
 }
-ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 2.4, 2.4)  # 실제 방 치수로 나중에 교체
+ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
 PORT = 8766
 
 

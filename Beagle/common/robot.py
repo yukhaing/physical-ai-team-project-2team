@@ -12,6 +12,13 @@ from .lidar import cardinal_distances, sanitize_scan
 
 Segment = tuple[float, float, float, float]
 
+# scripts/12_calibrate_encoders.py로 실측한 값 (12% 속도, 3초 직진, 실측 13cm 이동
+# 대비 좌 1065 / 우 1060 raw count). config/course_config.json의 값은 이 로봇 실물과
+# 맞지 않아(약 4.3배 과대) 실측치로 교체했습니다.
+# 실물 roboid.Beagle.left_encoder()/right_encoder()가 raw 카운트를 반환하므로 필요합니다.
+ENCODER_M_PER_COUNT_LEFT = 0.00012207
+ENCODER_M_PER_COUNT_RIGHT = 0.00012264
+
 
 def rectangle_segments(x0: float, y0: float, x1: float, y1: float) -> list[Segment]:
     return [(x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)]
@@ -177,12 +184,16 @@ class MockBeagle:
         return cardinal_distances(scan)["rear"]
 
     def left_encoder(self) -> float:
+        # 실물 roboid.Beagle.left_encoder()는 raw 엔코더 카운트를 반환합니다
+        # (config/course_config.json의 encoder_meter_per_count_left로 변환).
+        # dry-run에서도 같은 단위로 맞춰서, DeadReckoning이 실물/시뮬 구분 없이
+        # 동일한 변환식을 쓸 수 있게 합니다.
         self._update()
-        return self.left_distance_m * 1000.0
+        return self.left_distance_m / ENCODER_M_PER_COUNT_LEFT
 
     def right_encoder(self) -> float:
         self._update()
-        return self.right_distance_m * 1000.0
+        return self.right_distance_m / ENCODER_M_PER_COUNT_RIGHT
 
     def gyroscope_z(self) -> float:
         self._update()

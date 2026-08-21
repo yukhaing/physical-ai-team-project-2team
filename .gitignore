@@ -124,6 +124,8 @@ yolo/data/roboflow_dataset/test/
 # =====================================================
 output/
 results/
+!results/beagle/
+!results/beagle/**
 runs/
 checkpoints/
 predictions/
