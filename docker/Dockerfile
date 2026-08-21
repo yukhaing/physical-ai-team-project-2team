@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-opencv \
     python3-vcstool \
+    tmux \
     ros-jazzy-cv-bridge \
     ros-jazzy-rmw-zenoh-cpp \
     ros-jazzy-usb-cam \

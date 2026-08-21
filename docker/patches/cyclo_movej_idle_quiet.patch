@@ -12,3 +12,4 @@ diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node
 -                "Controller idle. Waiting for the first moveJ command; QP is not running.");
      return;
    }
+ 

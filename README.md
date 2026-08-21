@@ -40,3 +40,36 @@ Cyclo physical configuration is available at:
 
 The camera preview publishes `/camera_box_target`, which is intentionally separate
 from the robot command input `/box_target_pose`.
+
+## Integrated system startup
+
+Zenoh, robot bringup, MoveJ, camera, homography, coordinator, RViz, and the
+status monitor run in separate `tmux` windows inside the Docker container.
+The start command prepares the nodes only; it does not request robot motion.
+
+```bash
+./scripts/start_omx_system.sh
+./scripts/attach_omx_system.sh
+./scripts/status_omx_system.sh
+./scripts/stop_omx_system.sh
+```
+
+Inside `tmux`, use `Ctrl-b` followed by `n`/`p` to change windows and
+`Ctrl-b d` to detach. After checking the physical workspace, begin staging
+explicitly:
+
+```bash
+docker exec -it omx_box_project bash -lc '
+source /opt/ros/jazzy/setup.bash
+source /root/ros2_ws/install/setup.bash
+source /root/omx_box_project_ws/install/setup.bash
+ros2 service call /pick_coordinator/start std_srvs/srv/Trigger "{}"
+'
+```
+
+The defaults are `/dev/ttyACM0` and `/dev/video0`. Override them when needed:
+
+```bash
+OMX_PORT_NAME=/dev/ttyACM1 OMX_VIDEO_DEVICE=/dev/video2 \
+  ./scripts/start_omx_system.sh
+```
