@@ -2,12 +2,13 @@
 """Gate OMX pick/place work on Beagle arrival and coordinate software stop requests."""
 
 import json
+import math
 import uuid
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import String
+from std_msgs.msg import Float64MultiArray, String
 from std_srvs.srv import Trigger
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -24,6 +25,8 @@ class SortingOrchestrator(Node):
         self.declare_parameter('coordinator_status_topic', '/pick_coordinator/status')
         self.declare_parameter('pixel_selection_topic', '/console/select_pixel')
         self.declare_parameter('movej_topic', '/omx_movej_controller/movej')
+        self.declare_parameter('external_yolo_topic', '/yolo/selected_box')
+        self.declare_parameter('external_yolo_minimum_confidence', 0.35)
         self.enabled = False
         self.estopped = False
         self.job = None
@@ -41,6 +44,8 @@ class SortingOrchestrator(Node):
         self.create_subscription(String, '/console/robot_target', self.on_robot_target, 10)
         self.create_subscription(String, self.p('beagle_status_topic'), self.on_beagle, 10)
         self.create_subscription(String, self.p('coordinator_status_topic'), self.on_coordinator, 10)
+        self.create_subscription(
+            Float64MultiArray, self.p('external_yolo_topic'), self.on_external_yolo, 10)
         self.create_subscription(JointState, '/joint_states', self.on_joints, 10)
         self.coordinator_start = self.create_client(Trigger, '/pick_coordinator/start')
         self.coordinator_continue = self.create_client(Trigger, '/pick_coordinator/continue')
@@ -101,6 +106,22 @@ class SortingOrchestrator(Node):
         except (KeyError, ValueError, TypeError, json.JSONDecodeError) as error:
             self.report(f'Selection rejected: {error}')
             return
+        self.start_defect_transfer(selection)
+
+    def on_external_yolo(self, message):
+        """Dispatch Beagle from the OMX integration interface before pick starts."""
+        if not self.enabled or self.estopped or self.job or len(message.data) < 4:
+            return
+        is_defect, confidence, robot_x, robot_y = map(float, message.data[:4])
+        if is_defect < 0.5 or confidence < float(self.p('external_yolo_minimum_confidence')):
+            return
+        if not all(math.isfinite(value) for value in (confidence, robot_x, robot_y)):
+            return
+        self.start_defect_transfer({
+            'class': 'defect', 'confidence': confidence,
+            'robot_x': robot_x, 'robot_y': robot_y, 'source': 'omx_yolo_bridge'})
+
+    def start_defect_transfer(self, selection):
         self.job = dict(selection)
         if self.last_robot_target:
             self.job.update(self.last_robot_target)

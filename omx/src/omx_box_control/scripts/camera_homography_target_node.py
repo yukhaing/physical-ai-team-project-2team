@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import cv2
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point, PoseStamped
@@ -37,6 +38,7 @@ class CameraHomographyTarget(Node):
         self.declare_parameter('warning_reach_radius', 0.285)
         self.declare_parameter('workspace_marker_z', 0.002)
         self.declare_parameter('calibration_file', '/tmp/omx_camera_homography.yaml')
+        self.declare_parameter('calibration_seed_file', '')
         self.declare_parameter('show_window', True)
         flat = list(self.get_parameter('reference_points_link0').value)
         if len(flat) < 8 or len(flat) % 2:
@@ -69,6 +71,7 @@ class CameraHomographyTarget(Node):
         self.pixel_selection_sub = self.create_subscription(
             String, str(self.get_parameter('pixel_selection_topic').value),
             self.pixel_selection_callback, 10)
+        self.bootstrap_calibration()
         self.load_calibration()
         self.publish_workspace_markers()
         if self.show_window:
@@ -251,6 +254,24 @@ class CameraHomographyTarget(Node):
         storage.write('reference_points_link0', self.reference_points)
         storage.release()
         self.get_logger().info(f'Saved calibration to {self.calibration_file}')
+
+    def bootstrap_calibration(self):
+        """Seed a writable runtime calibration from a versioned profile once."""
+        seed_file = str(self.get_parameter('calibration_seed_file').value)
+        if not seed_file or os.path.isfile(self.calibration_file):
+            return
+        if not os.path.isfile(seed_file):
+            self.get_logger().warning(f'Calibration seed file not found: {seed_file}')
+            return
+        try:
+            directory = os.path.dirname(self.calibration_file)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            shutil.copy2(seed_file, self.calibration_file)
+            self.get_logger().info(
+                f'Created runtime calibration from profile: {seed_file}')
+        except OSError as error:
+            self.get_logger().error(f'Could not create runtime calibration: {error}')
 
     def load_calibration(self):
         if not os.path.isfile(self.calibration_file):
