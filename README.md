@@ -97,6 +97,10 @@ the existing ACT Python environment unchanged. Check it from another terminal:
 ./scripts/status_yolo_detector.sh
 ```
 
+`./scripts/status_omx_system.sh` also reports the YOLO publisher. The bridge
+node alone is not considered a complete target source; `/yolo/selected_box`
+must show at least one publisher before robot motion is requested.
+
 For a new physical setup, edit the seven measured `link0` X/Y points in
 `src/omx_box_control/config/homography_7point_calibration.yaml`, rebuild the
 package, and run:

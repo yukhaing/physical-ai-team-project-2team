@@ -180,6 +180,11 @@ status_system() {
   else
     echo "MISSING /camera1/image_raw"
   fi
+  if ros2 topic info /yolo/selected_box 2>/dev/null | grep -Eq 'Publisher count: [1-9]'; then
+    echo "OK      /yolo/selected_box publisher"
+  else
+    echo "MISSING /yolo/selected_box publisher (start the YOLO detector)"
+  fi
 }
 
 stop_system() {
