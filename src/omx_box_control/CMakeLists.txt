@@ -47,6 +47,7 @@ install(PROGRAMS
   scripts/movej_smooth_relay_node.py
   scripts/pick_coordinator_node.py
   scripts/rule_based_pick_node.py
+  scripts/yolo_target_bridge_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})

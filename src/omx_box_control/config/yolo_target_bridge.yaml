@@ -1,0 +1,15 @@
+yolo_target_bridge:
+  ros__parameters:
+    input_topic: /yolo/selected_box
+    output_topic: /camera_box_target
+    coordinator_status_topic: /pick_coordinator/status
+    base_frame: link0
+    target_z: 0.10
+    defect_only: true
+    minimum_confidence: 0.35
+    sample_count: 4
+    maximum_xy_spread: 0.012
+    min_x: 0.08
+    max_x: 0.32
+    max_abs_y: 0.25
+    max_radius: 0.31

@@ -32,5 +32,6 @@ docker exec "${CONTAINER}" bash -lc \
 docker exec -it \
   -e OMX_PORT_NAME="${OMX_PORT_NAME:-/dev/ttyACM0}" \
   -e OMX_VIDEO_DEVICE="${OMX_VIDEO_DEVICE:-/dev/video0}" \
+  -e OMX_TARGET_SOURCE="${OMX_TARGET_SOURCE:-manual}" \
   "${CONTAINER}" \
   /root/omx_box_project_ws/scripts/omx_system_container.sh start

@@ -73,3 +73,16 @@ The defaults are `/dev/ttyACM0` and `/dev/video0`. Override them when needed:
 OMX_PORT_NAME=/dev/ttyACM1 OMX_VIDEO_DEVICE=/dev/video2 \
   ./scripts/start_omx_system.sh
 ```
+
+Use the team's calibrated YOLO output instead of manual homography clicks:
+
+```bash
+OMX_TARGET_SOURCE=yolo ./scripts/start_omx_system.sh
+```
+
+In YOLO mode, the external detector must publish
+`std_msgs/msg/Float64MultiArray` on `/yolo/selected_box` using
+`[is_defect, confidence, x_link0_m, y_link0_m, joint5_rad]`. The bridge accepts
+only a stable, in-workspace defect while the coordinator is waiting for a new
+pick target. It forwards X/Y to `/camera_box_target`; detected joint5 is logged
+but intentionally not commanded until it has separate physical validation.
