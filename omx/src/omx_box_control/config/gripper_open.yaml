@@ -1,0 +1,25 @@
+gripper_open:
+  ros__parameters:
+    target_topic: /camera_box_target
+    joint_states_topic: /joint_states
+    gripper_action: /gripper_controller/gripper_cmd
+    base_frame: link0
+    dry_run: true
+    arm_joint_names: [joint1, joint2, joint3, joint4, joint5]
+    gripper_joint_name: gripper_joint_1
+    open_position: 1.0
+    minimum_open_position: 0.80
+    open_tolerance: 0.05
+    # ID16 can retain a small nonzero velocity after reaching the open stop.
+    open_watchdog_timeout: 2.0
+    open_watchdog_stable_time: 0.50
+    open_watchdog_position_epsilon: 0.003
+    max_effort: 10.0
+    target_max_age: 30.0
+    max_xy_error: 0.005
+    # Lower box setup; pitch pregrasp now plans 100mm with tracking margin.
+    min_pregrasp_z: 0.075
+    max_pregrasp_z: 0.18
+    min_pregrasp_pitch: 1.221730476
+    max_pregrasp_pitch: 1.570796327
+    fk_position_bias: [0.00126, 0.0, 0.00055]

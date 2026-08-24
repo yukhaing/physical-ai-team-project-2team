@@ -1,0 +1,16 @@
+yolo_detection:
+  ros__parameters:
+    image_topic: /camera1/image_raw
+    annotated_image_topic: /console/annotated_image
+    detections_topic: /console/detections
+    model_path: /root/omx_box_project_ws/models/best.pt
+    confidence_threshold: 0.50
+    device: cpu
+
+beagle_adapter:
+  ros__parameters:
+    simulation_arrival_seconds: 3.0
+
+operations_log:
+  ros__parameters:
+    database_path: /root/omx_box_project_ws/logs/operations.sqlite3

@@ -1,0 +1,45 @@
+movej_pick_retract:
+  ros__parameters:
+    target_topic: /pick_retract_target
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    base_frame: link0
+    dry_run: false
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    staging_positions: [0.0, -0.532389, 0.334964, 1.303389, 0.0]
+    staging_ignored_joint_names: [joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    require_staging: false
+    require_start_at_target: true
+    start_xy_tolerance: 0.006
+    start_min_z: 0.030
+    require_start_pitch: false
+    min_path_z: 0.030
+    min_final_z: 0.110
+    use_target_z: true
+    target_z: 0.130
+    z_tolerance: 0.0005
+    z_weight: 20000.0
+    min_pitch: 1.221730476
+    max_pitch: 1.570796327
+    preferred_pitch: 1.396263402
+    pitch_weight: 2.0
+    path_samples: 51
+    max_xy_error: 0.006
+    target_max_age: 30.0
+    min_x: 0.08
+    max_x: 0.32
+    max_abs_y: 0.25
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    xy_weight: 20000.0
+    joint_delta_weight: 100.0
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    move_duration: 10.0
+    minimum_completion_time: 16.0
+    joint_tolerance: 0.050
+    settle_time: 0.30
+    timeout: 20.0

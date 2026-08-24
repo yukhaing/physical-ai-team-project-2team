@@ -1,0 +1,19 @@
+movej_staging:
+  ros__parameters:
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    dry_run: false
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    staging_positions: [0.0, -0.532389, 0.334964, 1.303389, 0.0]
+    # ID 15 does not currently track position commands. All downstream plans
+    # preserve the measured joint5 roll, so staging must not force it to zero.
+    preserve_joint_names: [joint5]
+    move_duration: 4.0
+    # Include controller settle, terminal trim, and application settle.
+    minimum_completion_time: 5.0
+    # joint3 has a measured load-direction deadband of at least 0.014 rad.
+    # Match the downstream staging gate while retaining Cartesian Z checks.
+    joint_tolerance: 0.042
+    settle_time: 0.15
+    timeout: 12.0

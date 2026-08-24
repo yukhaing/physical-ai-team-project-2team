@@ -1,0 +1,25 @@
+diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+--- a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
++++ b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+@@ -282,7 +282,6 @@ void OmxMoveJControllerNode::jointStateCallback(
+   if (was_uninitialized || recovering_from_timeout) {
+     syncCommandStateToFeedback();
+     commanded_state_initialized_ = true;
+-    movej_target_initialized_ = true;
+     RCLCPP_INFO(
+       this->get_logger(),
+       "OMX MoveJ Controller activated. Waiting for moveJ commands...");
+@@ -384,10 +383,12 @@ void OmxMoveJControllerNode::controlLoopCallback()
+   }
+
+   if (!movej_target_initialized_) {
++    kinematics_solver_->updateState(q_, qdot_);
++    publishCurrentPose(kinematics_solver_->getPose(controlled_link_));
+     RCLCPP_WARN_THROTTLE(
+                 this->get_logger(),
+                 *this->get_clock(),
+                 2000,
+-                "Controller activated. Waiting for moveJ commands...");
++                "Controller idle. Waiting for the first moveJ command; QP is not running.");
+     return;
+   }
