@@ -42,6 +42,7 @@ class CameraHomography7PointCalibration(Node):
         self.image_points = []
         self.homography = None
         self.errors_mm = None
+        self.validation_points = []
         self.collecting = False
         self.window_name = 'OMX 7-Point Homography Calibration'
 
@@ -53,7 +54,8 @@ class CameraHomography7PointCalibration(Node):
 
         self.get_logger().info('Measurement only: no robot command is published')
         self.get_logger().info(f'Output file: {self.output_file}')
-        self.get_logger().info('Keys: c=start/restart, u=undo, q=quit')
+        self.get_logger().info(
+            'Keys: c=start/restart, u=undo, r=reset, v=clear validation, q=quit')
         for index, point in enumerate(self.reference_points):
             self.get_logger().info(
                 f'Click {index + 1}: link0 X={point[0]:.3f}m, Y={point[1]:.3f}m')
@@ -65,7 +67,11 @@ class CameraHomography7PointCalibration(Node):
             self.get_logger().error(f'Image conversion failed: {error}')
 
     def mouse_callback(self, event, x, y, _flags, _userdata):
-        if event != cv2.EVENT_LBUTTONDOWN or not self.collecting:
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        if not self.collecting:
+            if self.homography is not None:
+                self.preview_validation_point(x, y)
             return
         self.image_points.append((float(x), float(y)))
         index = len(self.image_points) - 1
@@ -75,6 +81,18 @@ class CameraHomography7PointCalibration(Node):
             f'link0=({target[0]:.3f}, {target[1]:.3f})')
         if len(self.image_points) == 7:
             self.compute_and_save()
+
+    def preview_validation_point(self, pixel_x, pixel_y):
+        """Show a transformed check point without publishing a robot target."""
+        pixel = np.asarray([[[float(pixel_x), float(pixel_y)]]], dtype=np.float64)
+        x, y = cv2.perspectiveTransform(pixel, self.homography)[0, 0]
+        if not np.isfinite(x) or not np.isfinite(y):
+            self.get_logger().error('Validation pixel produced an invalid coordinate')
+            return
+        self.validation_points.append((float(pixel_x), float(pixel_y), float(x), float(y)))
+        self.get_logger().info(
+            f'Validation only: pixel=({pixel_x}, {pixel_y}) -> '
+            f'link0 X={x:.4f}m, Y={y:.4f}m; no target published')
 
     def compute_and_save(self):
         image = np.asarray(self.image_points, dtype=np.float64)
@@ -121,6 +139,12 @@ class CameraHomography7PointCalibration(Node):
             cv2.circle(display, (int(x), int(y)), 6, (0, 255, 255), -1)
             cv2.putText(display, str(index + 1), (int(x) + 8, int(y) - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        for pixel_x, pixel_y, world_x, world_y in self.validation_points:
+            point = (int(pixel_x), int(pixel_y))
+            cv2.drawMarker(display, point, (255, 0, 255), cv2.MARKER_CROSS, 16, 2)
+            cv2.putText(display, f'X={world_x:.3f} Y={world_y:.3f}',
+                        (point[0] + 8, point[1] - 8), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5, (255, 0, 255), 2)
 
         if self.collecting:
             index = len(self.image_points)
@@ -129,7 +153,7 @@ class CameraHomography7PointCalibration(Node):
                       f'Y={point[1]:.3f} m')
         elif self.homography is not None:
             status = (f'SAVED  mean={np.mean(self.errors_mm):.2f}mm '
-                      f'max={np.max(self.errors_mm):.2f}mm  c=redo')
+                      f'max={np.max(self.errors_mm):.2f}mm  click=validate')
         else:
             status = 'READY  c=start calibration'
         cv2.rectangle(display, (0, 0), (display.shape[1], 45), (0, 0, 0), -1)
@@ -142,11 +166,22 @@ class CameraHomography7PointCalibration(Node):
             self.image_points = []
             self.homography = None
             self.errors_mm = None
+            self.validation_points = []
             self.collecting = True
             self.get_logger().info('Calibration started; click points 1 through 7 in order')
         elif key == ord('u') and self.collecting and self.image_points:
             removed = self.image_points.pop()
             self.get_logger().info(f'Undid pixel ({removed[0]:.0f}, {removed[1]:.0f})')
+        elif key == ord('r'):
+            self.image_points = []
+            self.homography = None
+            self.errors_mm = None
+            self.validation_points = []
+            self.collecting = False
+            self.get_logger().info('Calibration reset; press c to start')
+        elif key == ord('v'):
+            self.validation_points = []
+            self.get_logger().info('Validation markers cleared')
         elif key == ord('q'):
             rclpy.shutdown()
 

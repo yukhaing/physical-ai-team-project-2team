@@ -107,4 +107,5 @@ ros2 launch omx_box_control camera_homography_7point_calibration.launch.py
 Press `c` and click all seven points in configuration order. The generated
 `omx_camera_homography_7point.yaml` is required by the YOLO runtime setup
 script. There is no fallback to an older environment's calibration. This tool only reads images and never
-commands the robot.
+commands the robot. After saving, click independent check points to preview
+their transformed `link0` X/Y without publishing a target.
