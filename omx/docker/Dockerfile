@@ -3,6 +3,8 @@ FROM robotis/open-manipulator:5.0.0
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-noto-cjk \
+    locales \
     python3-opencv \
     python3-pip \
     python3-pyqt5 \
@@ -11,6 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-rmw-zenoh-cpp \
     ros-jazzy-usb-cam \
     && rm -rf /var/lib/apt/lists/*
+
+RUN locale-gen ko_KR.UTF-8
+ENV LANG=ko_KR.UTF-8
+ENV LC_ALL=ko_KR.UTF-8
 
 # Model weights are a runtime asset mounted or copied into the workspace.
 RUN python3 -m pip install --no-cache-dir ultralytics

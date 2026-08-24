@@ -43,7 +43,7 @@ class BeagleAdapter(Node):
             self.state = 'stopped'
             self.publish_status('software stop requested')
             return
-        if name not in ('normal_loading', 'defect_loading', 'home'):
+        if name not in ('defect_loading', 'home'):
             self.state = 'failed'
             self.publish_status(f'unsupported command: {name}')
             return

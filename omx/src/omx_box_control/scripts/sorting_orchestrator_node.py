@@ -30,6 +30,7 @@ class SortingOrchestrator(Node):
         self.last_robot_target = None
         self.joints = {}
         self.returning_home = False
+        self.awaiting_operator_unload = False
         self.status_pub = self.create_publisher(String, self.p('status_topic'), 10)
         self.beagle_pub = self.create_publisher(String, self.p('beagle_command_topic'), 10)
         self.event_pub = self.create_publisher(String, self.p('job_event_topic'), 10)
@@ -73,11 +74,15 @@ class SortingOrchestrator(Node):
             self.estopped = False
             self.enabled = False
             self.job = None
+            self.returning_home = False
+            self.awaiting_operator_unload = False
             self.report('RESET: inspect hardware, then press 가동')
         elif command == 'start_omx':
             self.start_omx()
         elif command == 'continue':
             self.call(self.coordinator_continue, 'OMX continue')
+        elif command == 'operator_unloaded':
+            self.return_home_after_unload()
         elif command in ('stop', 'estop'):
             self.stop(emergency=command == 'estop')
 
@@ -85,11 +90,14 @@ class SortingOrchestrator(Node):
         if not self.enabled or self.estopped:
             self.report('Selection ignored: system is not enabled')
             return
+        if self.job:
+            self.report('Selection ignored: a defect transfer is already in progress')
+            return
         try:
             selection = json.loads(message.data)
             label = selection['class']
-            if label not in ('normal', 'defect'):
-                raise ValueError('class must be normal or defect')
+            if label != 'defect':
+                raise ValueError('only defect boxes can be moved')
         except (KeyError, ValueError, TypeError, json.JSONDecodeError) as error:
             self.report(f'Selection rejected: {error}')
             return
@@ -98,10 +106,9 @@ class SortingOrchestrator(Node):
             self.job.update(self.last_robot_target)
         self.job['job_id'] = str(uuid.uuid4())
         self.job['beagle_state'] = 'moving'
-        destination = f'{label}_loading'
         self.beagle_pub.publish(String(data=json.dumps({
-            'command': destination, 'job_id': self.job['job_id']})))
-        self.report(f'BEAGLE_MOVING: {destination}; OMX is locked until arrival')
+            'command': 'defect_loading', 'job_id': self.job['job_id']})))
+        self.report('DEFECT_DETECTED: Beagle moving to the defect loading station; OMX is locked until arrival')
 
     def on_robot_target(self, message):
         try:
@@ -126,9 +133,11 @@ class SortingOrchestrator(Node):
             self.report('BEAGLE_ARRIVED: OMX 집기 시작 가능')
         elif state == 'idle' and self.returning_home:
             self.returning_home = False
+            self.awaiting_operator_unload = False
             self.event_pub.publish(String(data=json.dumps({
                 'event': 'return_completed', 'job_id': self.job['job_id']})))
-            self.report('BEAGLE_HOME: job complete')
+            self.report('BEAGLE_HOME: defect transfer complete; ready for the next detection')
+            self.job = None
         elif state in ('failed', 'stopped'):
             self.report(f'BEAGLE_{state.upper()}: OMX remains locked')
 
@@ -148,12 +157,11 @@ class SortingOrchestrator(Node):
             # The coordinator clears old targets at cycle start; restore the retained UI click.
             self.pixel_pub.publish(String(data=json.dumps(self.job)))
             self.report('TARGET_READY: press 집기 계속 to begin the existing pick flow')
-        elif state == 'COMPLETE' and not self.returning_home:
-            self.event_pub.publish(String(data=json.dumps(dict(self.job, event='omx_completed'))))
-            self.returning_home = True
-            self.beagle_pub.publish(String(data=json.dumps({
-                'command': 'home', 'job_id': self.job['job_id']})))
-            self.report('OMX_COMPLETE: Beagle returning home')
+        elif state == 'COMPLETE' and not self.returning_home and not self.awaiting_operator_unload:
+            self.awaiting_operator_unload = True
+            self.event_pub.publish(String(data=json.dumps(
+                dict(self.job, event='awaiting_operator_unload'))))
+            self.report('OMX_COMPLETE: defect box placed. Wait for the operator to unload, then press "Operator unload complete"')
         elif state == 'FAILED':
             self.report('OMX_FAILED: inspect robot before reset')
 
@@ -165,9 +173,25 @@ class SortingOrchestrator(Node):
         future.add_done_callback(lambda result: self.report(
             f'{description}: {result.result().message}' if result.result() else f'{description} failed'))
 
+    def return_home_after_unload(self):
+        if not self.enabled or self.estopped:
+            self.report('Return blocked: system is disabled or emergency locked')
+        elif not self.job or not self.awaiting_operator_unload:
+            self.report('Operator unload signal ignored: no defect box is waiting at the loading station')
+        elif self.returning_home:
+            self.report('Beagle is already returning home')
+        else:
+            self.awaiting_operator_unload = False
+            self.returning_home = True
+            self.beagle_pub.publish(String(data=json.dumps({
+                'command': 'home', 'job_id': self.job['job_id']})))
+            self.report('OPERATOR_UNLOAD_CONFIRMED: Beagle returning home')
+
     def stop(self, emergency):
         self.enabled = False
         self.estopped = self.estopped or emergency
+        self.awaiting_operator_unload = False
+        self.returning_home = False
         self.beagle_pub.publish(String(data=json.dumps({
             'command': 'stop', 'job_id': self.job.get('job_id') if self.job else None})))
         for client in self.cancel_clients:

@@ -75,6 +75,8 @@ class ConsoleNode(Node):
     def select_pixel(self, x, y):
         candidates = []
         for detection in self.detections:
+            if detection.get('class') != 'defect':
+                continue
             dx, dy = detection['center_x'] - x, detection['center_y'] - y
             candidates.append((dx * dx + dy * dy, detection))
         if not candidates:
@@ -93,6 +95,7 @@ class ConsoleWindow(QWidget):
         self.node = node
         self.setWindowTitle('OMX 통합 관제')
         self.resize(1180, 720)
+        self.setWindowTitle('OMX 불량 박스 이송 통합 관제')
         self.video = VideoLabel('카메라 대기 중')
         self.video.setAlignment(Qt.AlignCenter)
         self.video.setMinimumSize(760, 560)
@@ -100,6 +103,7 @@ class ConsoleWindow(QWidget):
         self.video.clicked.connect(self.on_click)
         self.status = QLabel('DISABLED')
         self.status.setWordWrap(True)
+        self.operator_unloaded_button = QPushButton('작업자 하역 완료: 원위치 복귀')
         self.run_button = QPushButton('가동')
         self.stop_button = QPushButton('정지')
         self.estop_button = QPushButton('비상정지 (소프트웨어)')
@@ -116,6 +120,7 @@ class ConsoleWindow(QWidget):
         for button in (self.run_button, self.stop_button, self.estop_button,
                        self.start_omx_button, self.continue_button, self.reset_button):
             side.addWidget(button)
+        side.insertWidget(6, self.operator_unloaded_button)
         side.addWidget(QLabel('완료 작업 로그'))
         side.addWidget(self.log, 1)
         layout = QHBoxLayout(self)
@@ -126,6 +131,7 @@ class ConsoleWindow(QWidget):
         self.estop_button.clicked.connect(lambda: self.node.command('estop'))
         self.start_omx_button.clicked.connect(lambda: self.node.command('start_omx'))
         self.continue_button.clicked.connect(lambda: self.node.command('continue'))
+        self.operator_unloaded_button.clicked.connect(lambda: self.node.command('operator_unloaded'))
         self.reset_button.clicked.connect(lambda: self.node.command('reset'))
         self.node.signals.frame_ready.connect(self.show_frame)
         self.node.signals.status_ready.connect(self.status.setText)

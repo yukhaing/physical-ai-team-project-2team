@@ -35,20 +35,20 @@ class OperationsLog(Node):
             event = json.loads(message.data)
         except json.JSONDecodeError:
             return
-        if event.get('event') == 'omx_completed':
+        if event.get('event') == 'awaiting_operator_unload':
             timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds')
-            label = event['class']
+            label = 'defect'
             self.db.execute('''INSERT OR REPLACE INTO operations
                 (job_id, completed_at, classification, confidence, pixel_x, pixel_y,
                  robot_x, robot_y, beagle_destination, omx_result, beagle_return_result)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
                     event['job_id'], timestamp, label, event.get('confidence'), event.get('x'),
                     event.get('y'), event.get('robot_x'), event.get('robot_y'),
-                    f'{label}_loading', 'completed', 'pending'))
+                    'defect_loading', 'placed_waiting_operator', 'pending'))
             self.db.commit()
             # GUI intentionally receives only these two fields.
             self.recent_pub.publish(String(data=json.dumps({
-                'completed_at': timestamp, 'classification': label})))
+                'completed_at': timestamp, 'classification': 'defect awaiting operator unload'})))
         elif event.get('event') == 'return_completed':
             self.db.execute('UPDATE operations SET beagle_return_result = ? WHERE job_id = ?',
                             ('completed', event['job_id']))
