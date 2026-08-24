@@ -1,0 +1,3 @@
+# Keep ROS Jazzy cv_bridge compatible with its NumPy 1.x binary build.
+numpy==1.26.4
+ultralytics==8.4.127

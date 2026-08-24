@@ -14,6 +14,29 @@ OMX-F가 파손 상자를 집어 분류 위치로 옮기는 계산 기반 통합
 
 ## 실행 순서
 
+현재 프로젝트에서는 모델, calibration, 별도 Python 가상환경을 준비하고
+검출기를 실행하는 다음 호스트 명령을 권장한다.
+
+```bash
+cd ~/omx_box_project_ws
+./scripts/start_yolo_detector.sh
+```
+
+상태 확인:
+
+```bash
+./scripts/status_yolo_detector.sh
+```
+
+기본 실행 장치는 CPU다. CUDA 실행 환경이 별도로 검증된 경우에만 다음처럼
+변경한다.
+
+```bash
+OMX_YOLO_DEVICE=0 ./scripts/start_yolo_detector.sh
+```
+
+아래는 구성 요소를 수동으로 실행할 때의 상세 순서다.
+
 각 명령은 별도 터미널에서 실행한다.
 
 1. Zenoh router

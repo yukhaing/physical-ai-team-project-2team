@@ -86,3 +86,18 @@ In YOLO mode, the external detector must publish
 only a stable, in-workspace defect while the coordinator is waiting for a new
 pick target. It forwards X/Y to `/camera_box_target`; detected joint5 is logged
 but intentionally not commanded until it has separate physical validation.
+
+Prepare and run the isolated YOLO detector environment in
+`physical_ai_server`:
+
+```bash
+./scripts/start_yolo_detector.sh
+```
+
+This copies the checked-in model and calibration to `/opt/omx_yolo`, creates a
+separate virtual environment with a ROS-compatible NumPy version, and leaves
+the existing ACT Python environment unchanged. Check it from another terminal:
+
+```bash
+./scripts/status_yolo_detector.sh
+```

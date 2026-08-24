@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import os
 import cv2
 import numpy as np
 import rclpy
@@ -10,8 +11,10 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray
 from ultralytics import YOLO
 
-CALIBRATION='/tmp/omx_camera_homography_7point.yaml'
-MODEL='/tmp/box_defect_best.pt'
+CALIBRATION=os.environ.get(
+ 'OMX_YOLO_CALIBRATION','/opt/omx_yolo/omx_camera_homography_7point.yaml')
+MODEL=os.environ.get('OMX_YOLO_MODEL','/opt/omx_yolo/box_defect_best.pt')
+DEVICE=os.environ.get('OMX_YOLO_DEVICE','cpu')
 
 def load_calibration():
  fs=cv2.FileStorage(CALIBRATION,cv2.FILE_STORAGE_READ)
@@ -42,7 +45,7 @@ class N(Node):
   return raw+correction
  def cb(self,msg):
   im=self.b.imgmsg_to_cv2(msg,'bgr8');det=im.copy();ang=im.copy()
-  with torch.inference_mode():r=self.m.predict(im,conf=.35,verbose=False,device='cpu')[0]
+  with torch.inference_mode():r=self.m.predict(im,conf=.35,verbose=False,device=DEVICE)[0]
   found=[]
   for b in r.boxes:
    name=self.m.names[int(b.cls.item())];cf=float(b.conf.item())
