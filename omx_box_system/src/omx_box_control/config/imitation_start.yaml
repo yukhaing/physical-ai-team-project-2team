@@ -1,0 +1,25 @@
+# OMX-F 모방학습 시작 자세
+# 기준 프레임: link0
+# 엔드이펙터 프레임: end_effector_link
+
+imitation_start_joints:
+  gripper_joint_1: 0.9955535313375741
+  joint1: 0.007669903939221179
+  joint2: 0.26844663787978007
+  joint3: -0.56603891073000866
+  joint4: 1.8852623883112463
+  joint5: -0.009203884727520872
+
+imitation_start_pose:
+  frame_id: link0
+
+  position:
+    x: 0.212
+    y: 0.000
+    z: 0.122
+
+  orientation:
+    x: -0.006
+    y: 0.713
+    z: 0.006
+    w: 0.701

@@ -1,0 +1,42 @@
+name: omx_box_system
+
+services:
+  omx_box_system:
+    container_name: omx_box_system
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: omx-box-system:jazzy
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+    privileged: true
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
+      rttime: -1
+      memlock: 8428281856
+    network_mode: host
+    ipc: host
+    pid: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - RMW_IMPLEMENTATION=rmw_zenoh_cpp
+      - ROS_DOMAIN_ID=30
+    volumes:
+      - /dev:/dev
+      - /dev/shm:/dev/shm
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
+      - ../:/root/omx_box_system
+      - omx_box_build:/root/omx_box_system/build
+      - omx_box_install:/root/omx_box_system/install
+      - omx_box_log:/root/omx_box_system/log
+    command: bash
+
+volumes:
+  omx_box_build:
+  omx_box_install:
+  omx_box_log:

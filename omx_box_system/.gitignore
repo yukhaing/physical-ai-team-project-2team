@@ -1,0 +1,30 @@
+# ROS/colcon generated files
+build/
+install/
+log/
+
+# Crash dumps and temporary files
+core
+core.*
+.tmp_*
+*.log
+
+# Python caches
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local editor/OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Runtime Hugging Face cache may contain credentials and large datasets/models.
+docker/physical_ai/huggingface/*
+!docker/physical_ai/huggingface/.gitkeep
+
+# Runtime workspaces
+docker/physical_ai/workspace/*
+!docker/physical_ai/workspace/.gitkeep
+docker/open_manipulator/workspace/*
+!docker/open_manipulator/workspace/.gitkeep
