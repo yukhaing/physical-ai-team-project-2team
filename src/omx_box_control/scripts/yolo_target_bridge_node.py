@@ -24,6 +24,11 @@ class YoloTargetBridge(Node):
             'minimum_confidence': 0.35,
             'sample_count': 4,
             'maximum_xy_spread': 0.012,
+            'require_joint5': True,
+            'minimum_joint5': -0.80,
+            'maximum_joint5': 0.80,
+            'maximum_joint5_spread': 0.18,
+            'joint5_period': math.pi / 2.0,
             'min_x': 0.08,
             'max_x': 0.32,
             'max_abs_y': 0.25,
@@ -76,6 +81,15 @@ class YoloTargetBridge(Node):
         if not all(math.isfinite(value) for value in (confidence, x, y)):
             self.report('rejected non-finite YOLO target')
             return
+        require_joint5 = bool(self.p('require_joint5'))
+        if require_joint5 and not math.isfinite(joint5):
+            self.report('rejected YOLO target without a finite joint5 angle')
+            return
+        if math.isfinite(joint5) and not (
+                float(self.p('minimum_joint5')) <= joint5 <=
+                float(self.p('maximum_joint5'))):
+            self.report(f'rejected joint5 outside limit: {joint5:.4f}rad')
+            return
         if not (float(self.p('min_x')) <= x <= float(self.p('max_x'))):
             self.report(f'rejected X outside workspace: {x:.4f}m')
             return
@@ -97,11 +111,27 @@ class YoloTargetBridge(Node):
                 f'unstable YOLO target; spread x={spread[0]:.4f}m, y={spread[1]:.4f}m')
             return
 
+        finite_joint5 = values[np.isfinite(values[:, 3]), 3]
+        joint5_median = float('nan')
+        if finite_joint5.size:
+            period = float(self.p('joint5_period'))
+            if period <= 0.0:
+                self.report('rejected invalid joint5_period parameter')
+                return
+            phase = finite_joint5 * (2.0 * math.pi / period)
+            joint5_median = math.atan2(
+                float(np.mean(np.sin(phase))),
+                float(np.mean(np.cos(phase)))) * period / (2.0 * math.pi)
+            angle_error = (
+                finite_joint5 - joint5_median + period / 2.0) % period - period / 2.0
+            angle_spread = float(np.ptp(angle_error))
+            if angle_spread > float(self.p('maximum_joint5_spread')):
+                self.report(
+                    f'unstable YOLO joint5; spread={math.degrees(angle_spread):.1f}deg')
+                return
+
         x_median, y_median = np.median(values[:, :2], axis=0)
         confidence_median = float(np.median(values[:, 2]))
-        finite_joint5 = values[np.isfinite(values[:, 3]), 3]
-        joint5_median = (
-            float(np.median(finite_joint5)) if finite_joint5.size else float('nan'))
 
         target = PoseStamped()
         target.header.stamp = self.get_clock().now().to_msg()
@@ -109,14 +139,19 @@ class YoloTargetBridge(Node):
         target.pose.position.x = float(x_median)
         target.pose.position.y = float(y_median)
         target.pose.position.z = float(self.p('target_z'))
-        target.pose.orientation.w = 1.0
+        if math.isfinite(joint5_median):
+            # PoseStamped has no joint field. A roll-only quaternion carries the
+            # desired gripper-axis joint5 while X/Y remain in link0.
+            target.pose.orientation.x = math.sin(joint5_median / 2.0)
+            target.pose.orientation.w = math.cos(joint5_median / 2.0)
+        else:
+            target.pose.orientation.w = 1.0
         self.target_pub.publish(target)
         self.published_for_cycle = True
         q5_text = f'{joint5_median:.4f}rad' if math.isfinite(joint5_median) else 'unavailable'
         self.report(
             f'published stable defect target x={x_median:.4f}m, y={y_median:.4f}m, '
-            f'confidence={confidence_median:.3f}, detected joint5={q5_text}; '
-            'joint5 is not commanded by this bridge')
+            f'confidence={confidence_median:.3f}, target joint5={q5_text}')
 
 
 def main(args=None):
@@ -128,7 +163,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

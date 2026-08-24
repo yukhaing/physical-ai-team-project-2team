@@ -216,8 +216,11 @@ class PickCoordinator(Node):
         self.target_received_time = self.get_clock().now()
         if self.state == self.WAIT_PICK_TARGET:
             point = message.pose.position
+            orientation = message.pose.orientation
+            joint5 = 2.0 * math.atan2(orientation.x, orientation.w)
             self.report(
-                f'pick target received x={point.x:.4f}, y={point.y:.4f}; '
+                f'pick target received x={point.x:.4f}, y={point.y:.4f}, '
+                f'joint5={math.degrees(joint5):.2f}deg; '
                 'call ~/continue to begin uninterrupted pick')
 
     def on_stage_command(self, key, allowed_states, message):

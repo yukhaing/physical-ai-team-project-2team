@@ -78,8 +78,9 @@ The external detector must publish
 `std_msgs/msg/Float64MultiArray` on `/yolo/selected_box` using
 `[is_defect, confidence, x_link0_m, y_link0_m, joint5_rad]`. The bridge accepts
 only a stable, in-workspace defect while the coordinator is waiting for a new
-pick target. It forwards X/Y to `/camera_box_target`; detected joint5 is logged
-but intentionally not commanded until it has separate physical validation.
+pick target. It forwards X/Y and a stable joint5 target to `/camera_box_target`.
+The high-Z XY approach moves X/Y and joint5 together; pitch and descent retain
+the achieved gripper angle.
 
 Prepare and run the isolated YOLO detector environment in
 `physical_ai_server`:

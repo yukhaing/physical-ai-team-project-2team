@@ -27,6 +27,12 @@ movej_xy_approach:
     xy_weight: 20000.0
     joint_delta_weight: 0.02
     height_reward: 0.01
+    # Rotate the gripper to the stable YOLO box angle during the high-Z XY move.
+    # Pitch and descent stages retain the achieved joint5 afterward.
+    use_target_joint5: true
+    target_joint5_min: -0.80
+    target_joint5_max: 0.80
+    maximum_joint5_delta: 1.60
     move_duration: 5.5
     minimum_completion_time: 6.5
     # Match the measured joint3 load-direction deadband used by staging.

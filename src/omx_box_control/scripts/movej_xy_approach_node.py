@@ -62,6 +62,10 @@ class MoveJXyApproach(Node):
             'joint_delta_weight': 0.02,
             'candidate_xy_slack': 0.0,
             'height_reward': 0.01,
+            'use_target_joint5': False,
+            'target_joint5_min': -0.80,
+            'target_joint5_max': 0.80,
+            'maximum_joint5_delta': 1.60,
             'move_duration': 6.0,
             'minimum_completion_time': 6.0,
             'joint_tolerance': 0.03,
@@ -142,12 +146,32 @@ class MoveJXyApproach(Node):
         samples = max(2, int(self.p('path_samples')))
         return [self.fk(start + alpha * (goal - start)) for alpha in np.linspace(0.0, 1.0, samples)]
 
-    def plan(self, start, target_xy):
+    def target_joint5(self):
+        orientation = self.target.pose.orientation
+        values = np.asarray([
+            orientation.x, orientation.y, orientation.z, orientation.w], dtype=float)
+        if not np.isfinite(values).all():
+            return None, 'target joint5 quaternion is non-finite'
+        norm = float(np.linalg.norm(values))
+        if norm < 1e-9:
+            return None, 'target joint5 quaternion has zero norm'
+        values /= norm
+        x, y, z, w = values
+        if abs(y) > 1e-4 or abs(z) > 1e-4:
+            return None, 'target orientation is not a roll-only joint5 command'
+        joint5 = 2.0 * math.atan2(float(x), float(w))
+        joint5 = (joint5 + math.pi) % (2.0 * math.pi) - math.pi
+        if not (float(self.p('target_joint5_min')) <= joint5 <=
+                float(self.p('target_joint5_max'))):
+            return None, f'target joint5 is outside range: {math.degrees(joint5):.1f}deg'
+        return joint5, ''
+
+    def plan(self, start, target_xy, target_joint5=None):
         lower = np.asarray(self.p('joint_lower'), dtype=float)
         upper = np.asarray(self.p('joint_upper'), dtype=float)
         margin = float(self.p('joint_limit_margin'))
         bounds = list(zip(lower[1:4] + margin, upper[1:4] - margin))
-        fixed_q5 = float(start[4])
+        fixed_q5 = float(start[4] if target_joint5 is None else target_joint5)
 
         # Joint1 only rotates the planar arm about the base.  Solve it from the
         # requested radial direction instead of making SLSQP discover it.
@@ -155,7 +179,7 @@ class MoveJXyApproach(Node):
         radial_x = target_xy[0] + 0.01125 - bias[0]
         radial_y = target_xy[1] - bias[1]
         radial_distance = math.hypot(radial_x, radial_y)
-        lateral_tool_offset = -0.0016
+        lateral_tool_offset = -0.0016 * math.cos(fixed_q5)
         if radial_distance <= abs(lateral_tool_offset):
             raise RuntimeError('target is too close to the joint1 axis')
         local_x = math.sqrt(radial_distance ** 2 - lateral_tool_offset ** 2)
@@ -267,6 +291,14 @@ class MoveJXyApproach(Node):
             start_pitch = float(np.sum(start[1:4]))
             if not float(self.p('start_min_pitch')) <= start_pitch <= float(self.p('start_max_pitch')):
                 return None, f'start pitch is outside range: {math.degrees(start_pitch):.2f}deg'
+        if self.p('use_target_joint5'):
+            target_joint5, error = self.target_joint5()
+            if error:
+                return None, error
+            if abs(target_joint5 - start[4]) > float(self.p('maximum_joint5_delta')):
+                return None, (
+                    f'target joint5 change is too large: '
+                    f'{math.degrees(abs(target_joint5 - start[4])):.1f}deg')
         return start, ''
 
     def on_confirm(self, _request, response):
@@ -278,8 +310,14 @@ class MoveJXyApproach(Node):
             response.success, response.message = False, error
             return response
         target_xy = np.asarray([self.target.pose.position.x, self.target.pose.position.y])
+        target_joint5 = None
+        if self.p('use_target_joint5'):
+            target_joint5, error = self.target_joint5()
+            if error:
+                response.success, response.message = False, error
+                return response
         try:
-            goal = self.plan(start, target_xy)
+            goal = self.plan(start, target_xy, target_joint5)
         except Exception as exception:
             response.success, response.message = False, f'planning failed: {exception}'
             return response
@@ -296,7 +334,8 @@ class MoveJXyApproach(Node):
             return response
         summary = (f'planned q={[round(value, 5) for value in goal]}; '
                    f'XY error={xy_error*1000:.2f}mm, final Z={final[2]:.4f}m, '
-                   f'path min Z={minimum_z:.4f}m, pitch={math.degrees(pitch):.2f}deg')
+                   f'path min Z={minimum_z:.4f}m, pitch={math.degrees(pitch):.2f}deg, '
+                   f'joint5={math.degrees(goal[4]):.2f}deg')
         if self.p('dry_run'):
             self.report(f'DRY_RUN: {summary}')
             response.success, response.message = False, f'dry_run=true; {summary}'

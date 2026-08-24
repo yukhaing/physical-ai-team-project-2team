@@ -121,6 +121,12 @@ python3 /root/omx_box_system/experiments/yolo_pick_sort_once.py
 YOLO GUI는 `/yolo/angle_annotated`, 자동 분류 입력은 `/yolo/selected_box`를 사용한다.
 정상 상자 임계값은 `0.75`, 파손 상자 임계값은 `0.35`다.
 
+`/yolo/selected_box` 형식은
+`[is_defect, confidence, x_link0_m, y_link0_m, joint5_rad]`이다. Bridge는
+4프레임의 X/Y와 joint5가 모두 안정적일 때 roll-only quaternion으로 같은
+`/camera_box_target`에 묶어 전달한다. pick XY approach는 높은 Z에서 X/Y와
+joint5를 동시에 이동하고, 이어지는 pitch와 PTP 하강은 그 joint5를 유지한다.
+
 ## 검증된 동작
 
 ```text
