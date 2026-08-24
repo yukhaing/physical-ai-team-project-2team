@@ -1,0 +1,10 @@
+camera_homography_target:
+  ros__parameters:
+    image_topic: /camera1/image_raw
+    base_frame: link0
+    target_z: 0.10
+    reference_points_link0: [0.12, -0.10, 0.28, -0.10, 0.28, 0.10, 0.12, 0.10]
+    target_pose_topic: /camera_box_target
+    marker_topic: /camera_box_marker
+    calibration_file: /tmp/omx_camera_homography.yaml
+    show_window: true
