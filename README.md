@@ -101,3 +101,16 @@ the existing ACT Python environment unchanged. Check it from another terminal:
 ```bash
 ./scripts/status_yolo_detector.sh
 ```
+
+For a new physical setup, edit the seven measured `link0` X/Y points in
+`src/omx_box_control/config/homography_7point_calibration.yaml`, rebuild the
+package, and run:
+
+```bash
+ros2 launch omx_box_control camera_homography_7point_calibration.launch.py
+```
+
+Press `c` and click all seven points in configuration order. The generated
+`omx_camera_homography_7point.yaml` is preferred automatically by the YOLO
+runtime setup script. This calibration tool only reads images and never
+commands the robot.

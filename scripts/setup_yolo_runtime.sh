@@ -4,6 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTAINER="physical_ai_server"
 RUNTIME_DIR="/opt/omx_yolo"
+CALIBRATION_SOURCE="${ROOT_DIR}/integration/omx_box_system/calibration/omx_camera_homography_7point.yaml"
+
+if [[ ! -f "${CALIBRATION_SOURCE}" ]]; then
+  CALIBRATION_SOURCE="${ROOT_DIR}/integration/omx_box_system/calibration/omx_camera_homography_7point_20260820.yaml"
+fi
 
 if ! docker ps --format '{{.Names}}' | grep -Fxq "${CONTAINER}"; then
   echo "ERROR: ${CONTAINER} is not running." >&2
@@ -15,7 +20,7 @@ docker cp \
   "${ROOT_DIR}/integration/omx_box_system/experiments/yolo_calibrated_preview.py" \
   "${CONTAINER}:${RUNTIME_DIR}/yolo_calibrated_preview.py"
 docker cp \
-  "${ROOT_DIR}/integration/omx_box_system/calibration/omx_camera_homography_7point_20260820.yaml" \
+  "${CALIBRATION_SOURCE}" \
   "${CONTAINER}:${RUNTIME_DIR}/omx_camera_homography_7point.yaml"
 docker cp \
   "${ROOT_DIR}/integration/omx_box_system/models/box_defect_best.pt" \
