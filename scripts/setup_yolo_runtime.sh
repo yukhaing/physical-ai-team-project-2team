@@ -6,12 +6,15 @@ CONTAINER="physical_ai_server"
 RUNTIME_DIR="/opt/omx_yolo"
 CALIBRATION_SOURCE="${ROOT_DIR}/integration/omx_box_system/calibration/omx_camera_homography_7point.yaml"
 
-if [[ ! -f "${CALIBRATION_SOURCE}" ]]; then
-  CALIBRATION_SOURCE="${ROOT_DIR}/integration/omx_box_system/calibration/omx_camera_homography_7point_20260820.yaml"
-fi
-
 if ! docker ps --format '{{.Names}}' | grep -Fxq "${CONTAINER}"; then
   echo "ERROR: ${CONTAINER} is not running." >&2
+  exit 1
+fi
+
+if [[ ! -f "${CALIBRATION_SOURCE}" ]]; then
+  echo "ERROR: current seven-point calibration does not exist:" >&2
+  echo "  ${CALIBRATION_SOURCE}" >&2
+  echo "Run camera_homography_7point_calibration.launch.py first." >&2
   exit 1
 fi
 

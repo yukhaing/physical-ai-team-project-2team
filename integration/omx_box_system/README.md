@@ -7,7 +7,7 @@ OMX-F가 파손 상자를 집어 분류 위치로 옮기는 계산 기반 통합
 
 - `experiments/yolo_calibrated_preview.py`: YOLO 검출, 좌표·상자 각도 계산 및 `/yolo/selected_box` 발행
 - `experiments/yolo_pick_sort_once.py`: HOME부터 검출·파지·분류·HOME 복귀까지 한 번에 실행
-- `calibration/omx_camera_homography_7point_20260820.yaml`: 고정 카메라 7점 캘리브레이션
+- `calibration/omx_camera_homography_7point.yaml`: 현재 환경에서 새로 측정한 7점 calibration
 - `models/box_defect_best.pt`: YOLO 파손 상자 검출 가중치
 - `launch/omx_f.launch.py`: 현재 OpenRB 기본 시리얼 ID가 반영된 bringup launch 파일
 - `experiments/act_*.py`: 모방학습 ACT 연결 실험 및 안전 브리지
@@ -46,7 +46,8 @@ integration/omx_box_system/calibration/omx_camera_homography_7point.yaml
 화면과 로그의 평균·최대 재투영 오차를 확인한다. 이 오차는 사용한 기준점에
 대한 오차이므로, 저장 후 calibration에 쓰지 않은 별도 위치들을 실측해 최종
 XY 오차를 검증해야 한다. 카메라 위치나 각도, 작업면 높이가 바뀌면 다시
-calibration한다. 새 결과는 다음 YOLO 시작 시 자동으로 우선 적용된다.
+calibration한다. 과거 환경의 fallback은 없으며, 새 결과가 없으면 YOLO 실행은
+안전하게 거부된다.
 
 현재 프로젝트에서는 모델, calibration, 별도 Python 가상환경을 준비하고
 검출기를 실행하는 다음 호스트 명령을 권장한다.
@@ -97,7 +98,7 @@ ros2 launch open_manipulator_bringup camera_usb_cam.launch.py \
 ```bash
 docker cp experiments/yolo_calibrated_preview.py \
   physical_ai_server:/tmp/yolo_calibrated_preview.py
-docker cp calibration/omx_camera_homography_7point_20260820.yaml \
+docker cp calibration/omx_camera_homography_7point.yaml \
   physical_ai_server:/tmp/omx_camera_homography_7point.yaml
 docker cp models/box_defect_best.pt \
   physical_ai_server:/tmp/box_defect_best.pt

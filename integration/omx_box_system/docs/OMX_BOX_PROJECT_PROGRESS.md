@@ -225,9 +225,9 @@ joint2 + joint3 + joint4 ≈ 0
 구현 파일:
 
 ```text
-src/omx_box_control/scripts/camera_homography_target_node.py
-src/omx_box_control/config/homography_target.yaml
-src/omx_box_control/launch/camera_homography_target.launch.py
+src/omx_box_control/scripts/camera_homography_7point_calibration_node.py
+src/omx_box_control/config/homography_7point_calibration.yaml
+src/omx_box_control/launch/camera_homography_7point_calibration.launch.py
 ```
 
 ### 현재 기본 기준점
@@ -256,7 +256,7 @@ r: 캘리브레이션 초기화
 q: 영상 창 닫기
 ```
 
-`c`를 누른 뒤 실제 기준점을 YAML 순서 1→2→3→4로 클릭한다. 계산된 행렬은 현재 `/tmp/omx_camera_homography.yaml`에 저장된다.
+`c`를 누른 뒤 실제 기준점을 YAML 순서 1→2→3→4→5→6→7로 클릭한다. 계산된 행렬은 현재 환경의 `integration/omx_box_system/calibration/omx_camera_homography_7point.yaml`에 저장된다.
 
 ### 출력
 
@@ -405,7 +405,7 @@ ros2 launch open_manipulator_bringup camera_usb_cam.launch.py \
 ### Homography target node
 
 ```bash
-ros2 launch omx_box_control camera_homography_target.launch.py
+ros2 launch omx_box_control camera_homography_7point_calibration.launch.py
 ```
 
 ### 프로젝트 RViz
@@ -434,7 +434,7 @@ RViz 확인 사항:
 - [x] 목표 XYZ 축·점·텍스트 시각화
 - [x] 근사 도달 가능 영역 grid
 - [x] HD 웹캠 영상 연동
-- [x] 4점 Homography 계산
+- [x] 7점 Homography 계산
 - [x] 카메라 클릭 목표 Pose 및 Marker 발행
 - [x] 카메라 목표와 로봇 명령 분리
 - [x] 사용자 코드 독립 ROS 패키지 분리

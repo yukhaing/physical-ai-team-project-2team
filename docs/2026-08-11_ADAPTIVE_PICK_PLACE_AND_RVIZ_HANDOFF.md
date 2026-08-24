@@ -56,7 +56,7 @@ rviz2
 ### 2.5 Homography
 
 ```bash
-ros2 launch omx_box_control camera_homography_target.launch.py
+ros2 launch omx_box_control camera_homography_7point_calibration.launch.py
 ```
 
 ### 2.6 Pick coordinator
@@ -103,8 +103,8 @@ RViz 기본 화면은 5cm grid, 가까운 orbit view로 저장했다. RobotModel
 관련 파일:
 
 ```text
-src/omx_box_control/scripts/camera_homography_target_node.py
-src/omx_box_control/config/homography_target.yaml
+src/omx_box_control/scripts/camera_homography_7point_calibration_node.py
+src/omx_box_control/config/homography_7point_calibration.yaml
 src/omx_box_control/rviz/omx_box_project.rviz
 docker/Dockerfile
 ```

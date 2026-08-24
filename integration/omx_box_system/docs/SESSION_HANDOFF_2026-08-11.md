@@ -62,7 +62,7 @@
 /controller_manager
 /robot_state_publisher
 /usb_cam                  # 이름이 같은 노드 2개 존재
-/camera_homography_target # 이름이 같은 노드 2개 존재
+/camera_homography_7point_calibration # 현재 7점 측정 전용 노드
 /yolo_priority_go
 /yolo_defect_move_service
 ```

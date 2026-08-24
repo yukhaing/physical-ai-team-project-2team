@@ -6,7 +6,6 @@ WORKSPACE="/root/omx_box_project_ws"
 LOG_DIR="${WORKSPACE}/log/system"
 PORT_NAME="${OMX_PORT_NAME:-/dev/ttyACM0}"
 VIDEO_DEVICE="${OMX_VIDEO_DEVICE:-/dev/video0}"
-TARGET_SOURCE="${OMX_TARGET_SOURCE:-manual}"
 
 source_ros() {
   # ROS/ament setup scripts reference optional variables that may be unset.
@@ -84,7 +83,7 @@ related_processes() {
   ps -eo comm=,args= | awk '
     $1 == "rmw_zenohd" { print; next }
     $1 == "python3" && $0 ~ /\/opt\/ros\/jazzy\/bin\/ros2/ &&
-      $0 ~ /(omx_f\.launch\.py|omx_controller\.launch\.py|camera_usb_cam\.launch\.py|camera_homography_target\.launch\.py|pick_coordinator\.launch\.py)/ { print }
+      $0 ~ /(omx_f\.launch\.py|omx_controller\.launch\.py|camera_usb_cam\.launch\.py|yolo_target_bridge\.launch\.py|pick_coordinator\.launch\.py)/ { print }
   '
 }
 
@@ -116,11 +115,6 @@ start_system() {
     echo "ERROR: camera device does not exist: ${VIDEO_DEVICE}" >&2
     exit 1
   }
-  if [[ "${TARGET_SOURCE}" != "manual" && "${TARGET_SOURCE}" != "yolo" ]]; then
-    echo "ERROR: OMX_TARGET_SOURCE must be 'manual' or 'yolo': ${TARGET_SOURCE}" >&2
-    exit 1
-  fi
-
   mkdir -p "${LOG_DIR}"
   tmux new-session -d -s "${SESSION}" -n zenoh \
     "$(ros_command 'ros2 run rmw_zenoh_cpp rmw_zenohd')"
@@ -142,20 +136,15 @@ start_system() {
   new_window coordinator "ros2 launch omx_box_control pick_coordinator.launch.py"
   wait_for_node /pick_coordinator 15 "pick coordinator"
 
-  if [[ "${TARGET_SOURCE}" == "manual" ]]; then
-    new_window target "ros2 launch omx_box_control camera_homography_target.launch.py"
-    wait_for_node /camera_homography_target 15 "manual homography target"
-  else
-    new_window target "ros2 launch omx_box_control yolo_target_bridge.launch.py"
-    wait_for_node /yolo_target_bridge 15 "YOLO target bridge"
-  fi
+  new_window target "ros2 launch omx_box_control yolo_target_bridge.launch.py"
+  wait_for_node /yolo_target_bridge 15 "YOLO target bridge"
 
   new_window rviz "rviz2"
   new_window monitor "ros2 topic echo /pick_coordinator/status"
   tmux select-window -t "${SESSION}:monitor"
 
   echo
-  echo "OMX system is ready with target source '${TARGET_SOURCE}'. No robot motion has been requested."
+  echo "OMX system is ready with the YOLO target bridge. No robot motion has been requested."
   echo "View logs: docker exec -it omx_box_project tmux attach -t ${SESSION}"
   echo "Begin staging only after inspection:"
   echo "  docker exec -it omx_box_project bash -lc 'source /opt/ros/jazzy/setup.bash; source /root/ros2_ws/install/setup.bash; source ${WORKSPACE}/install/setup.bash; ros2 service call /pick_coordinator/start std_srvs/srv/Trigger \"{}\"'"
@@ -176,7 +165,7 @@ status_system() {
       echo "MISSING ${node}"
     fi
   done
-  if ros2 node list 2>/dev/null | grep -Eq '^/(camera_homography_target|yolo_target_bridge)$'; then
+  if ros2 node list 2>/dev/null | grep -Fxq /yolo_target_bridge; then
     echo "OK      target source"
   else
     echo "MISSING target source"

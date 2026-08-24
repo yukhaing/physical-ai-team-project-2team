@@ -34,7 +34,7 @@ Cyclo physical configuration is available at:
 
 ## Nodes
 
-- `camera_homography_target_node.py`: webcam click to preview pose and RViz marker
+- `camera_homography_7point_calibration_node.py`: create the current camera calibration
 - `box_target_pose_bridge_node.py`: validated PoseStamped target to Cyclo MoveL
 - `omx_target_panel`: RViz target-entry and reachable-workspace panel
 
@@ -43,7 +43,7 @@ from the robot command input `/box_target_pose`.
 
 ## Integrated system startup
 
-Zenoh, robot bringup, MoveJ, camera, homography, coordinator, RViz, and the
+Zenoh, robot bringup, MoveJ, camera, YOLO target bridge, coordinator, RViz, and the
 status monitor run in separate `tmux` windows inside the Docker container.
 The start command prepares the nodes only; it does not request robot motion.
 
@@ -74,13 +74,7 @@ OMX_PORT_NAME=/dev/ttyACM1 OMX_VIDEO_DEVICE=/dev/video2 \
   ./scripts/start_omx_system.sh
 ```
 
-Use the team's calibrated YOLO output instead of manual homography clicks:
-
-```bash
-OMX_TARGET_SOURCE=yolo ./scripts/start_omx_system.sh
-```
-
-In YOLO mode, the external detector must publish
+The external detector must publish
 `std_msgs/msg/Float64MultiArray` on `/yolo/selected_box` using
 `[is_defect, confidence, x_link0_m, y_link0_m, joint5_rad]`. The bridge accepts
 only a stable, in-workspace defect while the coordinator is waiting for a new
@@ -111,6 +105,6 @@ ros2 launch omx_box_control camera_homography_7point_calibration.launch.py
 ```
 
 Press `c` and click all seven points in configuration order. The generated
-`omx_camera_homography_7point.yaml` is preferred automatically by the YOLO
-runtime setup script. This calibration tool only reads images and never
+`omx_camera_homography_7point.yaml` is required by the YOLO runtime setup
+script. There is no fallback to an older environment's calibration. This tool only reads images and never
 commands the robot.

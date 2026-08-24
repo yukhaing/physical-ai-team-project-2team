@@ -8,7 +8,7 @@ if docker ps --format '{{.Names}}' | grep -Fxq "${CONTAINER}"; then
   RELATED_PROCESSES="$(docker exec "${CONTAINER}" ps -eo comm=,args= | awk '
     $1 == "rmw_zenohd" { print; next }
     $1 == "python3" && $0 ~ /\/opt\/ros\/jazzy\/bin\/ros2/ &&
-      $0 ~ /(omx_f\.launch\.py|omx_controller\.launch\.py|camera_usb_cam\.launch\.py|camera_homography_target\.launch\.py|pick_coordinator\.launch\.py)/ { print }
+      $0 ~ /(omx_f\.launch\.py|omx_controller\.launch\.py|camera_usb_cam\.launch\.py|yolo_target_bridge\.launch\.py|pick_coordinator\.launch\.py)/ { print }
   ')"
   if [[ -n "${RELATED_PROCESSES}" ]]; then
     echo "ERROR: robot-related processes are already running in ${CONTAINER}." >&2
@@ -32,6 +32,5 @@ docker exec "${CONTAINER}" bash -lc \
 docker exec -it \
   -e OMX_PORT_NAME="${OMX_PORT_NAME:-/dev/ttyACM0}" \
   -e OMX_VIDEO_DEVICE="${OMX_VIDEO_DEVICE:-/dev/video0}" \
-  -e OMX_TARGET_SOURCE="${OMX_TARGET_SOURCE:-manual}" \
   "${CONTAINER}" \
   /root/omx_box_project_ws/scripts/omx_system_container.sh start

@@ -36,7 +36,6 @@ install(TARGETS omx_target_panel
 install(PROGRAMS
   scripts/box_target_pose_bridge_node.py
   scripts/place_keyboard_teach_node.py
-  scripts/camera_homography_target_node.py
   scripts/camera_homography_7point_calibration_node.py
   scripts/movej_staging_node.py
   scripts/movej_xy_approach_node.py
