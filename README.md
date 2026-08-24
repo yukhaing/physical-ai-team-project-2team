@@ -2,6 +2,9 @@
 
 Independent ROS 2 overlay workspace for camera-based OMX-F box targeting.
 
+새 PC·새 작업 공간에서 처음부터 실행하는 전체 한국어 안내서는
+[`docs/NEW_ENVIRONMENT_README.md`](docs/NEW_ENVIRONMENT_README.md)를 참고한다.
+
 ## Start the independent development container
 
 The project uses `robotis/open-manipulator:5.0.0` as its ROS/OMX base image and
