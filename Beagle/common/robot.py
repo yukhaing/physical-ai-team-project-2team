@@ -311,7 +311,14 @@ class SafeBeagle:
             raise TimeoutError("LiDAR 준비 시간이 초과되었습니다.")
 
     def lidar(self) -> list[float]:
-        return sanitize_scan(self.robot.lidar())
+        scan = sanitize_scan(self.robot.lidar())
+        if self.dry_run:
+            return scan
+        # scripts/14_diagnose_lidar_orientation.py 실측 확인 결과 (defect zone (0.78,0.12)에
+        # 배치 후 검증): 실물 LiDAR 배열의 인덱스 0이 로봇 전방이 아니라 후방을 가리킵니다
+        # (좌우 반전은 없음, 180도 오프셋만 있음) -- 그래서 절반만큼 회전시켜 맞춥니다.
+        half = len(scan) // 2
+        return scan[half:] + scan[:half]
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.robot, name)

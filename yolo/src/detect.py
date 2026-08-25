@@ -258,4 +258,22 @@ def send_to_robot(best_box,img_width, img_height, workspace_size, corner_x,corne
     return output
 
 
+# ------------------------------------------------------------
+# Full pipeline: combines all steps into one function
+# ------------------------------------------------------------
+def detect_and_select(image_path, img_width, img_height, 
+                       mm_per_pixel_x, mm_per_pixel_y, 
+                       origin_x, origin_y):
+    detections = run_detection(image_path)
+    detections = filter_by_confidence(detections)
+    detections = calculate_occlusion_score(detections)
+    detections = check_pickability(detections)
+    detections = calculate_priority_score(detections)
+    best_box = select_best_box(detections)
+    result = send_to_robot(best_box, img_width, img_height, 
+                            mm_per_pixel_x, mm_per_pixel_y, 
+                            origin_x, origin_y)
+    return result
+
+
 

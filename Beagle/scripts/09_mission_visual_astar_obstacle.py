@@ -5,13 +5,11 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-"""scripts\\04_mission_astar_slam.py와 완전히 동일하지만, 방 중앙에 벽(장애물)을 하나 두고
-A*가 그 주변으로 실제로 돌아가는지 확인합니다. 04는 그대로 두고(장애물 없는 기준선),
-이 파일만 장애물 버전입니다.
+"""scripts\\04_mission_astar_slam.py와 완전히 동일하지만, OMX 로봇팔 실측 위치에 장애물을
+하나 두고 A*가 그 주변으로 실제로 돌아가는지 확인합니다. 04는 그대로 두고(장애물 없는
+기준선), 이 파일만 장애물 버전입니다.
 
-장애물: 아래쪽 벽에 붙은 중앙 기둥 (x=0.45, y=0~0.30). start<->receiving 직선 경로(y=0.105)와
-receiving<->defect 대각선 경로를 막아서 위쪽(y>0.30)으로 돌아가게 합니다. 90cm x 70cm 실측
-방 치수에 맞춘 크기입니다.
+장애물: OMX 로봇팔 실측 위치 -- 중심 (0.17, 0.37), 반경 약 6.5cm를 감싸는 사각형으로 표현.
 막히면(전방 LiDAR 근접이 일정 시간 지속) beagle_sim.py의 step()에 이미 있는
 backup-turn-replan 복구 로직이 sim.auto_on을 통해 그대로 적용됩니다(이 파일은
 sim.set_goal()에 실제 주행을 맡기므로 별도 복구 코드가 필요 없습니다).
@@ -34,10 +32,10 @@ from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursui
 
 ZONE_SIZE = 0.21
 ZONES = {
-    "start": (0.795, 0.105),
-    "receiving": (0.26, 0.105),
-    "normal": (0.105, 0.595),
-    "defect": (0.795,0.595),
+    "start": (0.12, 0.12),
+    "receiving": (0.43, 0.38),
+    "normal": (0.78, 0.58),
+    "defect": (0.78, 0.12),
 }
 ZONE_COLORS = {
     "start": "#F5A623",
@@ -46,12 +44,12 @@ ZONE_COLORS = {
     "defect": "#D0021B",
 }
 ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
-OBSTACLE = [
-    # 아래쪽 벽에 붙은 기둥. start(0.795,0.105)<->receiving(0.26,0.105) 직선 경로와
-    # receiving<->defect 대각선을 막아서 y>0.30 쪽으로 돌아가게 만듭니다. 위로 0.40m
-    # 여유가 남아서(방 높이 0.70m 기준) 팽창 후에도 충분히 넓은 통로가 유지됩니다.
-    (0.45, 0.0, 0.45, 0.30),
-]
+OMX_CENTER = (0.17, 0.37)
+OMX_RADIUS = 0.065
+OBSTACLE = rectangle_segments(
+    OMX_CENTER[0] - OMX_RADIUS, OMX_CENTER[1] - OMX_RADIUS,
+    OMX_CENTER[0] + OMX_RADIUS, OMX_CENTER[1] + OMX_RADIUS,
+)  # OMX 로봇팔 실측 위치를 감싸는 사각형
 SEGMENTS = ROOM_BOUNDARY + OBSTACLE
 PORT = 8768
 
@@ -68,7 +66,10 @@ def draw_zones(ax) -> None:
 
 
 def main() -> None:
-    sim = BeagleSimulator(SEGMENTS, Pose2D(*ZONES["start"], math.pi), odom_noise=0.06, use_slam=True)
+    start_heading = math.atan2(
+        ZONES["receiving"][1] - ZONES["start"][1], ZONES["receiving"][0] - ZONES["start"][0]
+    )
+    sim = BeagleSimulator(SEGMENTS, Pose2D(*ZONES["start"], start_heading), odom_noise=0.06, use_slam=True)
     mission = Mission(zones=ZONES)
     server = TriggerServer(host="0.0.0.0", port=PORT)
     server.start()

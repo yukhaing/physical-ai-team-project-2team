@@ -39,10 +39,10 @@ from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursui
 
 ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (0.795, 0.105),
-    "receiving": (0.26, 0.105),
-    "normal": (0.105, 0.595),
-    "defect": (0.795, 0.595),
+    "start": (0.12, 0.12),
+    "receiving": (0.43, 0.38),
+    "normal": (0.78, 0.58),
+    "defect": (0.78, 0.12),
 }
 ZONE_COLORS = {
     "start": "#16C3B2",
@@ -100,7 +100,10 @@ def plan_leg(sim: BeagleSimulator, target_xy: tuple[float, float]) -> list[tuple
 
 
 def main() -> None:
-    sim = BeagleSimulator(ROOM_BOUNDARY, Pose2D(*ZONES["start"], math.pi), odom_noise=0.06, use_slam=True)
+    start_heading = math.atan2(
+        ZONES["receiving"][1] - ZONES["start"][1], ZONES["receiving"][0] - ZONES["start"][0]
+    )
+    sim = BeagleSimulator(ROOM_BOUNDARY, Pose2D(*ZONES["start"], start_heading), odom_noise=0.06, use_slam=True)
     mission = Mission(zones=ZONES)
     server = TriggerServer(host="0.0.0.0", port=PORT)
     server.start()
