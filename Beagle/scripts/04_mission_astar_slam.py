@@ -34,7 +34,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 from common.comm import TriggerServer
-from common.geometry import Pose2D
+from common.geometry import Pose2D, polar_to_xy
+from common.lidar import cardinal_distances, valid_fraction
+from common.localization import localize, resolve_180_ambiguity, scan_multiple
 from common.mission import Mission
 from common.motion import align_to_heading_command
 from common.robot import rectangle_segments
@@ -42,10 +44,10 @@ from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursui
 
 ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (0.795, 0.105),
-    "receiving": (0.26, 0.105),
-    "normal": (0.105, 0.595),
-    "defect": (0.795, 0.595),
+    "start": (0.12, 0.12),
+    "receiving": (0.43, 0.38),
+    "normal": (0.78, 0.58),
+    "defect": (0.78, 0.12),
 }
 ZONE_COLORS = {
     "start": "#16C3B2",
@@ -53,7 +55,46 @@ ZONE_COLORS = {
     "normal": "#3B4CCA",
     "defect": "#D0021B",
 }
-ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
+ROOM_WIDTH_M = 0.90
+ROOM_HEIGHT_M = 0.70
+ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, ROOM_WIDTH_M, ROOM_HEIGHT_M)  # 실측 방 치수 (90cm x 70cm)
+# 사각형 벽만으로는 방 중심 기준 180도 대칭이라 LiDAR 매칭만으로는 실제 위치와 그 반대편
+# (예: (0,0) 근처를 (0.9,0.7) 근처로 착각)을 구분할 수 없음 -- OMX 로봇팔(15번 스크립트와
+# 동일 실측 위치)을 비대칭 기준물로 넣어야 localize_robot()이 어느 쪽인지 제대로 구분함.
+OMX_CENTER = (0.17, 0.37)
+OMX_RADIUS = 0.065
+OBSTACLE = rectangle_segments(
+    OMX_CENTER[0] - OMX_RADIUS, OMX_CENTER[1] - OMX_RADIUS,
+    OMX_CENTER[0] + OMX_RADIUS, OMX_CENTER[1] + OMX_RADIUS,
+)
+SEGMENTS = ROOM_BOUNDARY + OBSTACLE
+
+
+def draw_lidar_view(ax, scan_mm: list[float]) -> None:
+    """지금 이 순간 LiDAR가 실제로 보고 있는 것 -- 로봇 기준 상대 좌표(위=전방)로 표시합니다."""
+    ax.clear()
+    points_mm = polar_to_xy(scan_mm)  # 0도=전방(+x), 90도=좌측(+y), 로봇 로컬 좌표
+    if points_mm:
+        xs = [p[1] / 1000.0 for p in points_mm]  # 화면상 위쪽이 전방이 되도록 x<->y 교체
+        ys = [p[0] / 1000.0 for p in points_mm]
+        dists = [math.hypot(p[0], p[1]) for p in points_mm]
+        ax.scatter(xs, ys, s=6, c=dists, cmap="RdYlGn", vmin=100, vmax=1500)
+    ax.plot(0, 0, "^", color="#20242C", markersize=14)  # robot, pointing up (front)
+    cd = cardinal_distances(scan_mm)
+    vf = valid_fraction(scan_mm)
+    ax.text(
+        0.02, 0.98,
+        f"front={cd['front']:.0f}mm  rear={cd['rear']:.0f}mm\n"
+        f"left={cd['left']:.0f}mm  right={cd['right']:.0f}mm\n"
+        f"valid={vf * 100:.0f}%",
+        transform=ax.transAxes, va="top", ha="left", fontsize=9,
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="#33415F"),
+    )
+    ax.set_xlim(-2.0, 2.0)
+    ax.set_ylim(-2.0, 2.0)
+    ax.set_aspect("equal")
+    ax.grid(True, alpha=0.3)
+    ax.set_title("LiDAR (robot-relative, front=up)")
 
 
 def draw_zones(ax) -> None:
@@ -73,15 +114,47 @@ def main() -> None:
     args = parser.parse_args()
 
     sim = BeagleSimulator(
-        ROOM_BOUNDARY, Pose2D(*ZONES["start"], math.pi),
+        SEGMENTS,
+        Pose2D(*ZONES["start"], math.atan2(
+            ZONES["receiving"][1] - ZONES["start"][1], ZONES["receiving"][0] - ZONES["start"][0]
+        )),
         odom_noise=0.06, use_slam=True, dry_run=args.dry_run,
     )
-    mission = Mission(zones=ZONES)
+
+    # 실물은 로봇이 start zone 안 정확히 어디에, 어느 방향으로 놓였는지 알 수 없으므로
+    # (dry-run처럼 정확한 시작 pose를 가정할 수 없음) LiDAR로 실제 위치/heading을 먼저
+    # 찾습니다. start에서 충분히 떨어져 있으면 미션을 "WAIT"이 아니라 "RETURN_TO_START"로
+    # 시작해서, 기존 루프가 그대로 start로 이동시킨 뒤 자동으로 WAIT으로 넘어가게 합니다.
+    initial_state = "WAIT"
+    if not args.dry_run:
+        print("실제 시작 위치 파악 중 (제자리에서 LiDAR 스캔)...")
+        scan = scan_multiple(sim.robot)
+        detected_pose, match_err_m = localize(scan, SEGMENTS, *ZONES["start"], search_radius=0.3)
+        # 격자 탐색 해상도 때문에 180도 대칭 쌍(예: (0,0) 근처 vs (0.9,0.7) 근처) 중 더 잘
+        # 맞는 쪽을 놓쳤을 수 있으니, 그 두 후보만 정밀하게 다시 채점해서 최종 확정합니다.
+        detected_pose, match_err_m = resolve_180_ambiguity(
+            scan, SEGMENTS, detected_pose, ROOM_WIDTH_M, ROOM_HEIGHT_M
+        )
+        heading_deg = math.degrees(detected_pose.theta) % 360.0
+        print(
+            f"추정 위치: ({detected_pose.x:.3f}, {detected_pose.y:.3f}) heading={heading_deg:.0f}deg "
+            f"(매칭오차 {match_err_m * 1000:.0f}mm)"
+        )
+        sim.est_pose = detected_pose
+        sim.robot.pose = detected_pose  # ground truth 없음 -- 추정치를 그대로 미러링
+        dist_to_start = math.hypot(detected_pose.x - ZONES["start"][0], detected_pose.y - ZONES["start"][1])
+        if dist_to_start > 0.05:
+            print(f"start zone과 {dist_to_start * 100:.0f}cm 떨어져 있습니다 -- 먼저 그쪽으로 이동합니다.")
+            initial_state = "RETURN_TO_START"
+        else:
+            print("이미 start zone 근처입니다.")
+
+    mission = Mission(zones=ZONES, state=initial_state)
     server = TriggerServer(host="0.0.0.0", port=8765)
     server.start()
 
     plt.ion()
-    fig, ax = plt.subplots(figsize=(7, 7))
+    fig, (ax, ax_lidar) = plt.subplots(1, 2, figsize=(13, 6.5))
     fig.canvas.manager.set_window_title("Mission Test (astar+slam)")
 
     running = {"value": True}
@@ -99,6 +172,7 @@ def main() -> None:
     leg_phase = "TRACKING"  # "ALIGNING" (turn in place first) or "TRACKING" (pure pursuit)
     align_heading = 0.0
     previous = time.monotonic()
+    last_print_time = 0.0
 
     try:
         while running["value"] and plt.fignum_exists(fig.number):
@@ -135,6 +209,7 @@ def main() -> None:
                     sim.auto_on = True  # hand off to set_goal()'s pure pursuit on the path already computed above
 
             sim.step(dt)
+            scan = sim.robot.lidar()
 
             if sim.status == "GOAL!" and mission.state in {
                 "MOVE_TO_RECEIVING", "MOVE_TO_ZONE", "RETURN_TO_START",
@@ -144,9 +219,25 @@ def main() -> None:
             true_trail.append((sim.robot.pose.x, sim.robot.pose.y))
             est_trail.append((sim.est_pose.x, sim.est_pose.y))
 
+            if now - last_print_time >= 0.5:
+                cd = cardinal_distances(scan)
+                vf = valid_fraction(scan)
+                print(
+                    f"[{mission.state}/{leg_phase}] pos=({sim.est_pose.x:.3f},{sim.est_pose.y:.3f}) "
+                    f"heading={math.degrees(sim.est_pose.theta):.1f}deg cmd={sim.cmd} status={sim.status} | "
+                    f"lidar front={cd['front']:.0f} rear={cd['rear']:.0f} left={cd['left']:.0f} "
+                    f"right={cd['right']:.0f}mm valid={vf * 100:.0f}%"
+                )
+                if vf < 0.5:
+                    print(f"  [WARN] LiDAR 유효 비율이 낮습니다 ({vf * 100:.0f}%) -- 센서/반사 문제 의심")
+                last_print_time = now
+
             ax.clear()
             for sx, sy, ex, ey in ROOM_BOUNDARY:
                 ax.plot([sx, ex], [sy, ey], color="#33415F", linewidth=3)
+            for i, (sx, sy, ex, ey) in enumerate(OBSTACLE):
+                ax.plot([sx, ex], [sy, ey], color="#E8590C", linewidth=5,
+                        label="Obstacle (OMX)" if i == 0 else "_nolegend_")
             draw_zones(ax)
             for i, leg_path in enumerate(all_paths):
                 draw_planned_path(ax, leg_path, label="A* Path" if i == 0 else "_nolegend_")
@@ -169,6 +260,9 @@ def main() -> None:
                 f"Mission: {mission.state}{box_tag}{dwell_tag}{phase_tag} | {mode_tag} | listening on :8765 | Q=quit"
             )
             ax.legend(loc="lower left", fontsize=8)
+
+            draw_lidar_view(ax_lidar, scan)
+
             fig.canvas.draw_idle()
             plt.pause(0.03)
     finally:

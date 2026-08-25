@@ -22,11 +22,11 @@ from common.robot import rectangle_segments
 from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursuit_target
 
 ZONES = {
-    "receiving": (0.26, 0.105),
-    "normal": (0.105, 0.595),
-    "defect": (0.795, 0.595),
+    "receiving": (0.43, 0.38),
+    "normal": (0.78, 0.58),
+    "defect": (0.78, 0.12),
 }
-START = Pose2D(0.795, 0.105, math.pi)
+START = Pose2D(0.12, 0.12, math.atan2(ZONES["receiving"][1] - 0.12, ZONES["receiving"][0] - 0.12))
 TIMEOUT_S = 90.0
 ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
 

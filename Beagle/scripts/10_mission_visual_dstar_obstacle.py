@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 하나 두고 D* Lite가 그 주변으로 실제로 돌아가는지 확인합니다. 08은 그대로 두고
 (장애물 없는 기준선), 이 파일만 장애물 버전입니다.
 
-장애물: 아래쪽 벽에 붙은 중앙 기둥 (x=0.45, y=0~0.30). 90cm x 70cm 실측 방 치수에
-맞춘 크기입니다 (09_mission_visual_astar_obstacle.py와 동일).
+장애물: OMX 로봇팔 실측 위치 -- 중심 (0.17, 0.37), 반경 약 6.5cm를 감싸는 사각형
+(09_mission_visual_astar_obstacle.py와 동일).
 
 이 파일은 sim.auto_on을 쓰지 않고 직접 pure_pursuit_wheels()로 주행하므로
 beagle_sim.py의 자체 복구 로직이 적용되지 않습니다 -- 그래서 여기에 같은 방식
@@ -36,10 +36,10 @@ from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursui
 
 ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (0.795, 0.105),
-    "receiving": (0.26, 0.105),
-    "normal": (0.105, 0.595),
-    "defect": (0.795, 0.595),
+    "start": (0.12, 0.12),
+    "receiving": (0.43, 0.38),
+    "normal": (0.78, 0.58),
+    "defect": (0.78, 0.12),
 }
 ZONE_COLORS = {
     "start": "#16C3B2",
@@ -48,11 +48,12 @@ ZONE_COLORS = {
     "defect": "#D0021B",
 }
 ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, 0.90, 0.70)  # 실측 방 치수 (90cm x 70cm)
-OBSTACLE = [
-    # 아래쪽 벽에 붙은 기둥. start<->receiving 직선 경로와 receiving<->defect 대각선을
-    # 막아서 y>0.30 쪽으로 돌아가게 만듭니다 (09_mission_visual_astar_obstacle.py와 동일).
-    (0.45, 0.0, 0.45, 0.30),
-]
+OMX_CENTER = (0.17, 0.37)
+OMX_RADIUS = 0.065
+OBSTACLE = rectangle_segments(
+    OMX_CENTER[0] - OMX_RADIUS, OMX_CENTER[1] - OMX_RADIUS,
+    OMX_CENTER[0] + OMX_RADIUS, OMX_CENTER[1] + OMX_RADIUS,
+)  # OMX 로봇팔 실측 위치를 감싸는 사각형
 SEGMENTS = ROOM_BOUNDARY + OBSTACLE
 PORT = 8769
 RECOVER_BACK_FRAMES = 14
@@ -106,7 +107,10 @@ def plan_leg(sim: BeagleSimulator, target_xy: tuple[float, float]) -> list[tuple
 
 
 def main() -> None:
-    sim = BeagleSimulator(SEGMENTS, Pose2D(*ZONES["start"], math.pi), odom_noise=0.06, use_slam=True)
+    start_heading = math.atan2(
+        ZONES["receiving"][1] - ZONES["start"][1], ZONES["receiving"][0] - ZONES["start"][0]
+    )
+    sim = BeagleSimulator(SEGMENTS, Pose2D(*ZONES["start"], start_heading), odom_noise=0.06, use_slam=True)
     mission = Mission(zones=ZONES)
     server = TriggerServer(host="0.0.0.0", port=PORT)
     server.start()

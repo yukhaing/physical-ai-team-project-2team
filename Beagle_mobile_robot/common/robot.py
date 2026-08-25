@@ -12,13 +12,6 @@ from .lidar import cardinal_distances, sanitize_scan
 
 Segment = tuple[float, float, float, float]
 
-# scripts/12_calibrate_encoders.py로 실측한 값 (12% 속도, 3초 직진, 실측 13cm 이동
-# 대비 좌 1065 / 우 1060 raw count). config/course_config.json의 값은 이 로봇 실물과
-# 맞지 않아(약 4.3배 과대) 실측치로 교체했습니다.
-# 실물 roboid.Beagle.left_encoder()/right_encoder()가 raw 카운트를 반환하므로 필요합니다.
-ENCODER_M_PER_COUNT_LEFT = 0.00012207
-ENCODER_M_PER_COUNT_RIGHT = 0.00012264
-
 
 def rectangle_segments(x0: float, y0: float, x1: float, y1: float) -> list[Segment]:
     return [(x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)]
@@ -26,49 +19,15 @@ def rectangle_segments(x0: float, y0: float, x1: float, y1: float) -> list[Segme
 
 def build_scene(name: str) -> tuple[list[Segment], Pose2D]:
     name = name.lower().strip()
-    if name == "room":
-        return rectangle_segments(0.0, 0.0, 1.2, 0.9), Pose2D(0.32, 0.26, 0.0)
-    if name in {"room_exit", "escape"}:
-        walls: list[Segment] = [
-            (0.0, 0.0, 1.2, 0.0),
-            (1.2, 0.0, 1.2, 0.28),
-            (1.2, 0.62, 1.2, 0.90),
-            (1.2, 0.90, 0.0, 0.90),
-            (0.0, 0.90, 0.0, 0.0),
-        ]
-        return walls, Pose2D(0.42, 0.43, 0.0)
-    if name == "corridor":
-        return [
-            (0.0, 0.28, 2.3, 0.28),
-            (0.0, 0.68, 2.3, 0.68),
-            (0.0, 0.28, 0.0, 0.68),
-            (2.3, 0.28, 2.3, 0.68),
-        ], Pose2D(0.25, 0.46, 0.0)
-    if name == "maze":
-        walls = [
-            (0.0, 0.2, 2.0, 0.2),
-            (0.0, 0.7, 1.55, 0.7),
-            (1.55, 0.7, 1.55, 1.7),
-            (2.0, 0.2, 2.0, 1.2),
-            (1.55, 1.7, 3.2, 1.7),
-            (2.0, 1.2, 3.2, 1.2),
-            (0.0, 0.2, 0.0, 0.7),
-            (3.2, 1.2, 3.2, 1.7),
-        ]
-        return walls, Pose2D(0.25, 0.47, 0.0)
-    if name in {"obstacles", "default"}:
-        walls = rectangle_segments(0.0, 0.0, 4.0, 3.0)
-        walls += rectangle_segments(1.8, 0.5, 2.15, 2.1)
-        walls += rectangle_segments(2.8, 1.9, 3.35, 2.25)
-        return walls, Pose2D(0.75, 0.75, 0.0)
-    if name == "narrow":
-        # 실물 실습 맵과 같은 치수의 ㄷ자 미로:
-        # 한 변 40cm, 통로 폭 13cm (로봇 폭 10cm + 양옆 여유 1.5cm).
-        walls = rectangle_segments(0.0, 0.0, 0.40, 0.40)
-        walls += rectangle_segments(0.13, 0.13, 0.27, 0.40)
-        return walls, Pose2D(0.065, 0.32, -math.pi / 2.0)
     if name == "open":
         return [], Pose2D(0.0, 0.0, 0.0)
+    if name == "shuttle":
+        # 90cm x 70cm work area. A small obstacle sits on the direct line between
+        # the receiving zone (36,37) and the defect zone (75,12) so --dry-run can
+        # exercise the reactive avoidance path, not just straight-line pursuit.
+        walls = rectangle_segments(0.0, 0.0, 0.90, 0.70)
+        walls += rectangle_segments(0.50, 0.20, 0.60, 0.30)
+        return walls, Pose2D(0.36, 0.37, 0.0)
     raise ValueError(f"unknown mock scene: {name}")
 
 
@@ -87,12 +46,12 @@ def ray_segment_distance(x: float, y: float, dx: float, dy: float, segment: Segm
 
 
 class MockBeagle:
-    """코드 흐름과 알고리즘 분기를 점검하는 간이 2D Beagle."""
+    """A minimal 2D Beagle stand-in for checking code flow and branching without hardware."""
 
     LEFT_WHEEL = 0
     RIGHT_WHEEL = 1
 
-    def __init__(self, scene: str = "default", *, seed: int = 7) -> None:
+    def __init__(self, scene: str = "shuttle", *, seed: int = 7) -> None:
         self.scene = scene
         self.segments, self.pose = build_scene(scene)
         self.random = random.Random(seed)
@@ -184,16 +143,12 @@ class MockBeagle:
         return cardinal_distances(scan)["rear"]
 
     def left_encoder(self) -> float:
-        # 실물 roboid.Beagle.left_encoder()는 raw 엔코더 카운트를 반환합니다
-        # (config/course_config.json의 encoder_meter_per_count_left로 변환).
-        # dry-run에서도 같은 단위로 맞춰서, DeadReckoning이 실물/시뮬 구분 없이
-        # 동일한 변환식을 쓸 수 있게 합니다.
         self._update()
-        return self.left_distance_m / ENCODER_M_PER_COUNT_LEFT
+        return self.left_distance_m * 1000.0
 
     def right_encoder(self) -> float:
         self._update()
-        return self.right_distance_m / ENCODER_M_PER_COUNT_RIGHT
+        return self.right_distance_m * 1000.0
 
     def gyroscope_z(self) -> float:
         self._update()
@@ -243,14 +198,14 @@ class MockBeagle:
 
 
 class SafeBeagle:
-    """속도 제한, 종료 정지, dry-run을 제공하는 안전 래퍼."""
+    """Wraps the real/mock Beagle with speed limiting, guaranteed stop-on-exit, and dry-run support."""
 
     def __init__(
         self,
         *,
         dry_run: bool = False,
         max_speed: float = 25.0,
-        scene: str = "default",
+        scene: str = "shuttle",
     ) -> None:
         self.dry_run = dry_run
         self.max_speed = abs(float(max_speed))
@@ -261,7 +216,7 @@ class SafeBeagle:
             try:
                 from roboid import Beagle  # type: ignore
             except ImportError as exc:
-                raise RuntimeError("roboid를 불러오지 못했습니다. --dry-run으로 먼저 실행하세요.") from exc
+                raise RuntimeError("Could not import roboid. Run with --dry-run first.") from exc
             self.robot = Beagle()
         atexit.register(self.stop)
         for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
@@ -308,17 +263,10 @@ class SafeBeagle:
                 if getattr(self.robot, "is_lidar_ready", lambda: True)():
                     return
                 time.sleep(0.05)
-            raise TimeoutError("LiDAR 준비 시간이 초과되었습니다.")
+            raise TimeoutError("LiDAR did not become ready in time.")
 
     def lidar(self) -> list[float]:
-        scan = sanitize_scan(self.robot.lidar())
-        if self.dry_run:
-            return scan
-        # scripts/14_diagnose_lidar_orientation.py 실측 확인 결과 (defect zone (0.78,0.12)에
-        # 배치 후 검증): 실물 LiDAR 배열의 인덱스 0이 로봇 전방이 아니라 후방을 가리킵니다
-        # (좌우 반전은 없음, 180도 오프셋만 있음) -- 그래서 절반만큼 회전시켜 맞춥니다.
-        half = len(scan) // 2
-        return scan[half:] + scan[:half]
+        return sanitize_scan(self.robot.lidar())
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.robot, name)

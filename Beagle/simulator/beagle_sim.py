@@ -38,7 +38,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.beagle_safe import MockBeagle, build_scene, Segment  # noqa: E402
-from common.geometry import Pose2D, integrate_differential_drive, integrate_wheel_distances, polar_to_xy, transform_points_mm, twist_to_wheel_percent, wheel_percent_to_mps  # noqa: E402
+from common.geometry import Pose2D, integrate_differential_drive, integrate_wheel_distances, polar_to_xy, transform_points_mm, twist_to_wheel_percent, wheel_percent_to_mps, wrap_angle  # noqa: E402
 from common.mapping import GridMeta, OccupancyGridMap, bresenham, inflate_obstacles  # noqa: E402
 from common.motion import calibrate_gyro_bias  # noqa: E402
 from common.planning import astar, grid_path_to_world, pure_pursuit_command, reduce_waypoints  # noqa: E402
@@ -337,7 +337,13 @@ class BeagleSimulator:
                 self.set_goal(*self.goal)
         elif self.auto_on and self.auto_path:
             self._replan_cooldown = max(0, self._replan_cooldown - 1)
-            front_blocked = self.robot.front_lidar() < 110
+            # zone들이 원래 벽에 붙어 있으므로, 목적지에 이미 가까운 상태에서 벽이 가까운
+            # 건 진짜 막힘이 아니라 정상적인 도착 과정임 -- 이 구간에서는 replan/recover를
+            # 걸지 않고 pure pursuit이 그대로 도착까지 끝내게 둡니다 (아래 60mm 비상정지는
+            # 여전히 적용됨).
+            gx, gy = self.auto_path[-1]
+            near_goal = math.hypot(self.est_pose.x - gx, self.est_pose.y - gy) < 0.15
+            front_blocked = (not near_goal) and self.robot.front_lidar() < 110
             if not front_blocked:
                 self._blocked_streak = 0
             elif self._replan_cooldown == 0 and self.goal:
@@ -346,7 +352,15 @@ class BeagleSimulator:
                 self._blocked_streak += 1
                 if self._blocked_streak >= 2:
                     print('Stuck near obstacle -> backing away before replanning')
-                    self._recover_turn_dir = 1.0 if self.robot.left_lidar() >= self.robot.right_lidar() else -1.0
+                    if self.goal:
+                        # 어느 쪽이 더 뚫려 있는지가 아니라, 목적지 방향으로 도는 게 더
+                        # 목적에 맞음 -- "더 뚫린 쪽"은 종종 목적지와 반대 방향이라 회복이
+                        # 오히려 길어질 수 있음.
+                        bearing_to_goal = math.atan2(self.goal[1] - self.est_pose.y, self.goal[0] - self.est_pose.x)
+                        heading_diff = wrap_angle(bearing_to_goal - self.est_pose.theta)
+                        self._recover_turn_dir = 1.0 if heading_diff > 0 else -1.0
+                    else:
+                        self._recover_turn_dir = 1.0 if self.robot.left_lidar() >= self.robot.right_lidar() else -1.0
                     self._recover_frames = self._RECOVER_BACK_FRAMES + self._RECOVER_TURN_FRAMES
                     self._blocked_streak = 0
                 else:
@@ -378,10 +392,18 @@ class BeagleSimulator:
         else:
             self.pp_target_point = None
 
-        # Front collision protection (simulator-level safety)
+        # Front collision protection (simulator-level safety) -- last-resort emergency
+        # stop only, at very close range (6cm) and regardless of turning direction (catches
+        # genuinely pushing into something even mid-turn, not just straight-line driving).
+        # Kept tight and direction-agnostic on purpose: zones sit close to walls by design,
+        # so a looser/farther trigger here fights the front_blocked replan/recovery logic
+        # below on every normal final approach to a wall-adjacent zone (verified: a 90mm/
+        # any-direction version caused an infinite block<->recover loop that never reached
+        # a corner-adjacent goal). The 110mm front_blocked check below is meant to react
+        # first, well before the robot gets this close.
         front = self.robot.front_lidar()
         left_cmd, right_cmd = self.cmd
-        if front < 90 and left_cmd > 0 and right_cmd > 0:
+        if front < 60 and (left_cmd + right_cmd) > 0:
             left_cmd = right_cmd = 0.0
             self.status = 'BLOCKED'
         self.robot.wheels(left_cmd, right_cmd)
