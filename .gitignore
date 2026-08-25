@@ -118,6 +118,9 @@ yolo/data/processed/
 yolo/data/roboflow_dataset/train/
 yolo/data/roboflow_dataset/valid/
 yolo/data/roboflow_dataset/test/
+yolo/data/roboflow_dataset/dataset/train/
+yolo/data/roboflow_dataset/dataset/valid/
+yolo/data/roboflow_dataset/dataset/test/
 
 # =====================================================
 # Generated Outputs
