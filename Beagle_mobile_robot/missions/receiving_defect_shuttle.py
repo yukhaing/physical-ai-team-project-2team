@@ -30,7 +30,7 @@ from common.geometry import Pose2D, euclidean, integrate_velocity, twist_to_whee
 from common.lidar import cardinal_distances, valid_fraction
 from common.logging_utils import CsvLogger
 from common.motion import calibrate_gyro_bias
-from common.robot import SafeBeagle
+from common.robot import SafeBeagle, rectangle_segments
 
 
 @dataclass(slots=True)
@@ -346,7 +346,7 @@ class ShuttleMission:
         }
 
 
-def run_mission(robot: SafeBeagle, box_signal: BoxSignal, settings: MissionSettings, *, duration_s: float, cycles: int, output_path: str) -> str:
+def run_mission(robot: SafeBeagle, box_signal: BoxSignal, settings: MissionSettings, *, duration_s: float, cycles: int, output_path: str, visualizer=None) -> str:
     mission = ShuttleMission(robot, box_signal, settings)
     mission.start()
     start = time.monotonic()
@@ -362,6 +362,8 @@ def run_mission(robot: SafeBeagle, box_signal: BoxSignal, settings: MissionSetti
                 f"pose=({row['x_cm']:5.1f},{row['y_cm']:5.1f})cm dist={row['dist_cm']:5.1f}cm "
                 f"cmd=({row['cmd_l']:5.1f},{row['cmd_r']:5.1f})"
             )
+            if visualizer is not None:
+                visualizer.update(row)
             if mission.state == "SENSOR_FAIL":
                 robot.stop()
                 print("SENSOR_FAIL: lidar data unreliable, stopping mission")
@@ -384,6 +386,7 @@ def main() -> None:
     parser.add_argument("--box-flag", default=None, help="override the box-placed flag file path from config")
     parser.add_argument("--simulate-signal-interval", type=float, default=None, help="dry-run only: override the auto-trigger interval from config")
     parser.add_argument("--output", default="logs/shuttle_mission.csv")
+    parser.add_argument("--visualize", action="store_true", help="show a live top-down plot of the mission")
     args = parser.parse_args()
 
     settings = load_settings(args.config)
@@ -394,8 +397,18 @@ def main() -> None:
     with SafeBeagle(dry_run=args.dry_run, scene=args.scene, max_speed=settings.nav_max_percent) as robot:
         robot.start_lidar()
         robot.wait_until_lidar_ready()
-        result = run_mission(robot, box_signal, settings, duration_s=args.duration, cycles=args.cycles, output_path=args.output)
+
+        visualizer = None
+        if args.visualize:
+            from common.visualize import ShuttleVisualizer
+
+            segments = robot.robot.segments if args.dry_run else rectangle_segments(0.0, 0.0, settings.boundary_x_m, settings.boundary_y_m)
+            visualizer = ShuttleVisualizer(settings, segments)
+
+        result = run_mission(robot, box_signal, settings, duration_s=args.duration, cycles=args.cycles, output_path=args.output, visualizer=visualizer)
         print("mission result:", result)
+        if visualizer is not None:
+            visualizer.finish(result)
 
 
 if __name__ == "__main__":
