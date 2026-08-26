@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     python3-opencv \
     python3-numpy \
+    python3-venv \
     python3-scipy \
     python3-pip \
     python3-pyqt5 \
@@ -24,7 +25,9 @@ ENV LANG=ko_KR.UTF-8
 ENV LC_ALL=ko_KR.UTF-8
 
 # Model weights are a runtime asset mounted or copied into the workspace.
-RUN python3 -m pip install --no-cache-dir ultralytics
+RUN python3 -m venv /opt/ultralytics-venv && \
+    /opt/ultralytics-venv/bin/python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    /opt/ultralytics-venv/bin/python -m pip install --no-cache-dir ultralytics
 
 ARG CYCLO_CONTROL_COMMIT=ceffbd7562028f6b317e462911e2a0991b9ba735
 RUN cd /root/ros2_ws/src && \
@@ -42,12 +45,9 @@ COPY patches/cyclo_movej_idle_quiet.patch /tmp/cyclo_movej_idle_quiet.patch
 RUN cd /root/ros2_ws/src/cyclo_control && \
     git apply /tmp/cyclo_movej_s_curve.patch && \
     git apply /tmp/cyclo_movej_s_curve_feedback_hold.patch && \
-    git apply /tmp/cyclo_movej_s_curve_bounded_settle.patch && \
-    git apply /tmp/cyclo_movej_s_curve_terminal_trim.patch
+    git apply /tmp/cyclo_movej_s_curve_bounded_settle.patch
 RUN cd /root/ros2_ws/src/cyclo_control && \
     git apply /tmp/cyclo_movej_idle_wait.patch
-RUN cd /root/ros2_ws/src/cyclo_control && \
-    git apply /tmp/cyclo_movej_idle_quiet.patch
 
 RUN apt-get update && \
     rosdep update && \
@@ -70,6 +70,7 @@ RUN mkdir -p /root/omx_box_project_ws && \
     printf '%s\n' \
       "alias omx_box_build='cd /root/omx_box_project_ws && colcon build --symlink-install'" \
       "alias omx_box_source='source /root/omx_box_project_ws/install/setup.bash'" \
+      "alias omx_yolo_env='export PATH=/opt/ultralytics-venv/bin:\$PATH'" \
       >> /root/.bashrc
 
 RUN mkdir -p /root/.rviz2 && \

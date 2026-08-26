@@ -1,3 +1,4 @@
+diff --git a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
 --- a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
 +++ b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
 @@ -75,6 +75,13 @@
@@ -11,7 +12,7 @@
 +  double smooth_terminal_trim_max_offset_;
 +  double smooth_terminal_trim_timeout_;
 +  double smooth_terminal_trim_capture_tolerance_;
-
+ 
    std::string urdf_path_;
    std::string srdf_path_;
 @@ -113,11 +120,16 @@
@@ -20,7 +21,7 @@
    bool smooth_settling_ = false;
 +  bool smooth_terminal_trim_stall_tracking_ = false;
 +  bool smooth_terminal_trimming_ = false;
-
+ 
    rclcpp::Time motion_start_time_;
    rclcpp::Time last_joint_state_time_;
    rclcpp::Time smooth_settle_start_time_;
@@ -31,6 +32,7 @@
    Eigen::VectorXd movej_start_;
    Eigen::VectorXd movej_goal_;
    trajectory_msgs::msg::JointTrajectory latest_movej_command_;
+diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
 --- a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
 +++ b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
 @@ -53,6 +53,18 @@
@@ -49,7 +51,7 @@
 +  smooth_terminal_trim_timeout_ = this->declare_parameter("smooth_terminal_trim_timeout", 5.0);
 +  smooth_terminal_trim_capture_tolerance_ =
 +    this->declare_parameter("smooth_terminal_trim_capture_tolerance", 0.01);
-
+ 
    urdf_path_ = this->declare_parameter("urdf_path", std::string(""));
    srdf_path_ = this->declare_parameter("srdf_path", std::string(""));
 @@ -351,6 +363,8 @@
@@ -159,7 +161,7 @@
 +        }
        }
      }
-
+ 
 @@ -490,6 +575,8 @@
    movej_goal_ = q_;
    movej_trajectory_active_ = false;
