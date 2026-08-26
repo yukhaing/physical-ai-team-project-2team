@@ -31,6 +31,7 @@ from common.lidar import cardinal_distances, valid_fraction
 from common.logging_utils import CsvLogger
 from common.motion import calibrate_gyro_bias
 from common.robot import SafeBeagle, rectangle_segments
+from common.comm import StatusClient, TriggerServer
 
 
 @dataclass(slots=True)
@@ -207,33 +208,25 @@ def update_pose(pose: Pose2D, commanded_left: float, commanded_right: float, dt:
 class BoxSignal:
     """Box-placed handoff signal from the OMX robot.
 
-    Nothing in this codebase talks to the OMX side directly, so this uses a
-    flag file as the hand-off: the OMX-side process (or an operator) creates
-    the file once a box is placed in the receiving zone, and this script
-    polls for it. If a real channel becomes available later (digital IO pin,
-    serial line, ROS topic, MQTT...), replace is_set()'s body with that read
-    -- reset()/is_set() is the only interface the mission loop depends on.
+    Wraps a TriggerServer that OMX connects to and sends
+    {"event": "box_placed"}\\n on. Once seen, the signal latches True and
+    stays True until reset() clears it -- reset()/is_set() is the only
+    interface the mission loop depends on, so nothing else changes.
     """
 
-    def __init__(self, flag_path: str, *, simulate_after_s: float | None = None) -> None:
-        self.flag_path = Path(flag_path)
-        self.flag_path.parent.mkdir(parents=True, exist_ok=True)
-        self.simulate_after_s = simulate_after_s
-        self._wait_started: float | None = None
+    def __init__(self, server: TriggerServer) -> None:
+        self.server = server
+        self._got_signal = False
 
     def reset(self) -> None:
-        try:
-            self.flag_path.unlink()
-        except FileNotFoundError:
-            pass
-        self._wait_started = time.monotonic()
+        self._got_signal = False
 
     def is_set(self) -> bool:
-        if self.flag_path.exists():
-            return True
-        if self.simulate_after_s is not None and self._wait_started is not None:
-            return (time.monotonic() - self._wait_started) >= self.simulate_after_s
-        return False
+        for message in self.server.poll():
+            if message.get("event") == "box_placed":
+                self._got_signal = True
+        return self._got_signal
+
 
 
 # ---- mission state machine -------------------------------------------------
@@ -260,10 +253,11 @@ def next_state(state: str, data: ShuttleData, dwell_s: float) -> str:
 
 
 class ShuttleMission:
-    def __init__(self, robot: SafeBeagle, box_signal: BoxSignal, settings: MissionSettings) -> None:
+    def __init__(self, robot: SafeBeagle, box_signal: BoxSignal, settings: MissionSettings, *, status_client: StatusClient | None = None) -> None:
         self.robot = robot
         self.box_signal = box_signal
         self.settings = settings
+        self.status_client = status_client
         self.avoider = ReactiveAvoider(settings)
         self.state = "WAIT_SIGNAL"
         self.pose = Pose2D(settings.receiving_m[0], settings.receiving_m[1], 0.0)
@@ -273,6 +267,11 @@ class ShuttleMission:
         self.cycles_done = 0
         self._gyro_bias = 0.0
         self._previous_time = 0.0
+        self._started_before = False
+
+    def _send(self, text: str, **extra: object) -> None:
+        if self.status_client is not None:
+            self.status_client.send_status(text, **extra)
 
     def start(self) -> None:
         self._gyro_bias = calibrate_gyro_bias(self.robot)
@@ -313,6 +312,19 @@ class ShuttleMission:
         new_state = next_state(self.state, data, s.dwell_s)
         if new_state != self.state:
             self.goal_stable = 0
+            if self.state == "WAIT_SIGNAL" and new_state == "GOTO_DEFECT":
+                self._send("출발", to="defect_zone")
+                self._send("defect 존으로 이동중")
+            elif self.state == "GOTO_DEFECT" and new_state == "DWELL_DEFECT":
+                self._send("도착", at="defect_zone")
+            elif self.state == "DWELL_DEFECT" and new_state == "GOTO_RECEIVING":
+                self._send("출발", to="receiving_zone")
+                self._send("대기 존으로 이동중")
+            elif self.state == "GOTO_RECEIVING" and new_state == "WAIT_SIGNAL":
+                if self._started_before:
+                    self._send("도착", at="receiving_zone")
+                self._started_before = True
+
             if new_state == "DWELL_DEFECT":
                 self.dwell_started = now
             if new_state == "WAIT_SIGNAL":
@@ -392,7 +404,11 @@ def main() -> None:
     settings = load_settings(args.config)
     box_flag_path = args.box_flag or settings.box_flag_path
     simulate_after_s = args.simulate_signal_interval if args.simulate_signal_interval is not None else settings.simulate_signal_interval_s
-    box_signal = BoxSignal(box_flag_path, simulate_after_s=simulate_after_s if args.dry_run else None)
+    
+    # TEMP for step 2 testing — step 4 replaces this with a --trigger-port CLI flag
+    trigger_server = TriggerServer(port=8765)
+    trigger_server.start()
+    box_signal = BoxSignal(trigger_server)
 
     with SafeBeagle(dry_run=args.dry_run, scene=args.scene, max_speed=settings.nav_max_percent) as robot:
         robot.start_lidar()
