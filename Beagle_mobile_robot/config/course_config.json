@@ -8,7 +8,7 @@
   "lidar": {
     "min_mm": 50,
     "max_mm": 5000,
-    "emergency_mm": 100.0,
+    "emergency_mm": 110.0,
     "turn_mm": 115.0,
     "side_clear_mm": 100.0,
     "backup_clear_mm": 200.0,
@@ -21,11 +21,11 @@
     "straight_percent": 14.0
   },
   "navigation": {
-    "speed_mps": 0.05,
-    "lookahead_m": 0.10,
-    "slowdown_alpha_rad": 0.25,
-    "max_wheel_percent": 22.0,
-    "goal_tolerance_m": 0.03,
+    "speed_mps": 0.06, 
+    "lookahead_m": 0.20, 
+    "slowdown_alpha_rad": 0.25,   
+    "max_wheel_percent": 22.0,  
+    "goal_tolerance_m": 0.01,
     "goal_stable_samples": 3
   },
   "boundary": {
@@ -34,7 +34,7 @@
   },
   "zones": {
     "receiving": {"x_m": 0.36, "y_m": 0.37},
-    "defect": {"x_m": 0.75, "y_m": 0.12}
+    "defect": {"x_m": 0.75, "y_m": 0.13}
   },
   "mission": {
     "dwell_seconds": 5.0,
