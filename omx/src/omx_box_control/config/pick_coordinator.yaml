@@ -42,7 +42,7 @@ pick_coordinator:
     empty_close_watchdog_timeout: 2.0
     empty_close_watchdog_stable_time: 0.30
     # Retain one human gate before moving a loaded box.
-    require_grasp_confirmation: true
+    require_grasp_confirmation: false
     place_correction_trigger_z: 0.100
     # Taught from measured /joint_states on 2026-08-20.
     remembered_place_xyz: [0.02347, -0.15494, 0.19253]

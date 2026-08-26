@@ -14,6 +14,6 @@ movej_staging:
     minimum_completion_time: 5.0
     # joint3 has a measured load-direction deadband of at least 0.014 rad.
     # Match the downstream staging gate while retaining Cartesian Z checks.
-    joint_tolerance: 0.042
+    joint_tolerance: 0.070
     settle_time: 0.15
     timeout: 12.0

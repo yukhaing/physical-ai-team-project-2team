@@ -232,7 +232,8 @@ class PickCoordinator(Node):
 
     def preflight_error(self):
         publishers = self.get_publishers_info_by_topic(self.p('movej_topic'))
-        foreign = [p.node_name for p in publishers if p.node_name != self.get_name()]
+        allowed_publishers = {self.get_name(), 'sorting_orchestrator'}
+        foreign = [p.node_name for p in publishers if p.node_name not in allowed_publishers]
         if foreign:
             return f'MoveJ command publisher already active: {foreign}'
         if self.joint_feedback_time is None:

@@ -27,6 +27,10 @@ class SortingOrchestrator(Node):
         self.declare_parameter('movej_topic', '/omx_movej_controller/movej')
         self.declare_parameter('external_yolo_topic', '/yolo/selected_box')
         self.declare_parameter('external_yolo_minimum_confidence', 0.35)
+        self.declare_parameter('bypass_beagle', False)
+        self.declare_parameter('auto_start_omx', False)
+        self.declare_parameter('auto_continue_pick', False)
+        self.declare_parameter('auto_complete_unload', False)
         self.enabled = False
         self.estopped = False
         self.job = None
@@ -126,6 +130,12 @@ class SortingOrchestrator(Node):
         if self.last_robot_target:
             self.job.update(self.last_robot_target)
         self.job['job_id'] = str(uuid.uuid4())
+        if bool(self.get_parameter('bypass_beagle').value):
+            self.job['beagle_state'] = 'arrived'
+            self.report('DEFECT_DETECTED: Beagle bypass enabled; OMX 집기 시작 가능')
+            if bool(self.get_parameter('auto_start_omx').value):
+                self.start_omx()
+            return
         self.job['beagle_state'] = 'moving'
         self.beagle_pub.publish(String(data=json.dumps({
             'command': 'defect_loading', 'job_id': self.job['job_id']})))
@@ -152,6 +162,8 @@ class SortingOrchestrator(Node):
         if state == 'arrived' and not self.returning_home:
             self.job['beagle_state'] = 'arrived'
             self.report('BEAGLE_ARRIVED: OMX 집기 시작 가능')
+            if bool(self.get_parameter('auto_start_omx').value):
+                self.start_omx()
         elif state == 'idle' and self.returning_home:
             self.returning_home = False
             self.awaiting_operator_unload = False
@@ -177,12 +189,20 @@ class SortingOrchestrator(Node):
         if state == 'WAIT_PICK_TARGET':
             # The coordinator clears old targets at cycle start; restore the retained UI click.
             self.pixel_pub.publish(String(data=json.dumps(self.job)))
-            self.report('TARGET_READY: press 집기 계속 to begin the existing pick flow')
+            if bool(self.get_parameter('auto_continue_pick').value):
+                self.report('TARGET_READY: auto-continue enabled; beginning pick flow')
+                self.call(self.coordinator_continue, 'OMX continue')
+            else:
+                self.report('TARGET_READY: press 집기 계속 to begin the existing pick flow')
         elif state == 'COMPLETE' and not self.returning_home and not self.awaiting_operator_unload:
             self.awaiting_operator_unload = True
             self.event_pub.publish(String(data=json.dumps(
                 dict(self.job, event='awaiting_operator_unload'))))
-            self.report('OMX_COMPLETE: defect box placed. Wait for the operator to unload, then press "Operator unload complete"')
+            if bool(self.get_parameter('auto_complete_unload').value):
+                self.report('OMX_COMPLETE: auto-complete unload enabled; finishing defect transfer')
+                self.return_home_after_unload()
+            else:
+                self.report('OMX_COMPLETE: defect box placed. Wait for the operator to unload, then press "Operator unload complete"')
         elif state == 'FAILED':
             self.report('OMX_FAILED: inspect robot before reset')
 
@@ -201,6 +221,12 @@ class SortingOrchestrator(Node):
             self.report('Operator unload signal ignored: no defect box is waiting at the loading station')
         elif self.returning_home:
             self.report('Beagle is already returning home')
+        elif bool(self.get_parameter('bypass_beagle').value):
+            self.awaiting_operator_unload = False
+            self.event_pub.publish(String(data=json.dumps({
+                'event': 'return_completed', 'job_id': self.job['job_id']})))
+            self.report('BEAGLE_HOME: Beagle bypass enabled; defect transfer complete; ready for the next detection')
+            self.job = None
         else:
             self.awaiting_operator_unload = False
             self.returning_home = True

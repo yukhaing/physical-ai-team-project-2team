@@ -34,7 +34,6 @@ install(TARGETS omx_target_panel
   LIBRARY DESTINATION lib
 )
 install(PROGRAMS
-  scripts/box_target_pose_bridge_node.py
   scripts/place_keyboard_teach_node.py
   scripts/camera_homography_target_node.py
   scripts/camera_homography_7point_calibration_node.py
@@ -47,7 +46,6 @@ install(PROGRAMS
   scripts/gripper_open_node.py
   scripts/movej_smooth_relay_node.py
   scripts/pick_coordinator_node.py
-  scripts/rule_based_pick_node.py
   scripts/yolo_detection_node.py
   scripts/yolo_target_bridge_node.py
   scripts/beagle_adapter_node.py

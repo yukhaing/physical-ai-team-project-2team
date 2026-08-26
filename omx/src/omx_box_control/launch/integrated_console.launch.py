@@ -24,7 +24,7 @@ def generate_launch_description():
         Node(package='omx_box_control', executable='beagle_adapter_node.py',
              name='beagle_adapter', output='screen', parameters=[config]),
         Node(package='omx_box_control', executable='sorting_orchestrator_node.py',
-             name='sorting_orchestrator', output='screen'),
+             name='sorting_orchestrator', output='screen', parameters=[config]),
         Node(package='omx_box_control', executable='operations_log_node.py',
              name='operations_log', output='screen', parameters=[config]),
         Node(package='omx_box_control', executable='omx_console.py',

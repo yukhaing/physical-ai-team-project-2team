@@ -3,13 +3,24 @@ yolo_detection:
     image_topic: /camera1/image_raw
     annotated_image_topic: /console/annotated_image
     detections_topic: /console/detections
+    selection_topic: /console/selected_box
+    pixel_selection_topic: /console/select_pixel
     model_path: /root/omx_box_project_ws/models/best.pt
     confidence_threshold: 0.50
     device: cpu
+    auto_select_defect: true
+    auto_select_min_interval_sec: 8.0
 
 beagle_adapter:
   ros__parameters:
     simulation_arrival_seconds: 3.0
+
+sorting_orchestrator:
+  ros__parameters:
+    bypass_beagle: true
+    auto_start_omx: true
+    auto_continue_pick: true
+    auto_complete_unload: true
 
 operations_log:
   ros__parameters:
