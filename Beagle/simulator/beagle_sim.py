@@ -344,14 +344,22 @@ class BeagleSimulator:
             gx, gy = self.auto_path[-1]
             near_goal = math.hypot(self.est_pose.x - gx, self.est_pose.y - gy) < 0.15
             front_blocked = (not near_goal) and self.robot.front_lidar() < 110
-            if not front_blocked:
+            bx0, by0, bx1, by1 = self.bounds
+            out_of_bounds = not (bx0 <= self.est_pose.x <= bx1 and by0 <= self.est_pose.y <= by1)
+            blocked = front_blocked or out_of_bounds
+            if not blocked:
                 self._blocked_streak = 0
             elif self._replan_cooldown == 0 and self.goal:
                 # Only counts once per replan attempt (every ~40 frames), not every
                 # frame it's blocked, so this tracks "replanned N times, still stuck".
+                # out_of_bounds always goes straight to back-up+turn (skips the single-replan
+                # first try) since replanning A* from a position outside the room's own grid
+                # isn't reliable -- backing up first gets the estimate back inside before
+                # the next plan is attempted.
                 self._blocked_streak += 1
-                if self._blocked_streak >= 2:
-                    print('Stuck near obstacle -> backing away before replanning')
+                if self._blocked_streak >= 2 or out_of_bounds:
+                    reason = 'outside room boundary' if out_of_bounds else 'near obstacle'
+                    print(f'Stuck ({reason}) -> backing away before replanning')
                     if self.goal:
                         # 어느 쪽이 더 뚫려 있는지가 아니라, 목적지 방향으로 도는 게 더
                         # 목적에 맞음 -- "더 뚫린 쪽"은 종종 목적지와 반대 방향이라 회복이
@@ -422,14 +430,34 @@ class BeagleSimulator:
             # 실제 센서 자체가 이미 노이즈를 포함하고 있음).
             left_count = self.robot.left_encoder()
             right_count = self.robot.right_encoder()
+            # Confirmed 2026-08-27 via debug print: raw encoder counts increase monotonically
+            # while driving forward (cmd positive), so this forward-positive formula is already
+            # correct. The earlier "arrow points opposite of real front" symptom is not an
+            # encoder/formula bug -- it's the assumed starting theta (--start-theta) not
+            # matching the robot's true physical orientation when the script started. Do not
+            # negate these without new evidence.
             delta_left_m = (left_count - self._prev_left_count) * ENCODER_M_PER_COUNT_LEFT
             delta_right_m = (right_count - self._prev_right_count) * ENCODER_M_PER_COUNT_RIGHT
             self._prev_left_count = left_count
             self._prev_right_count = right_count
-            gyro_delta_rad = math.radians((self.robot.gyroscope_z() - self._gyro_bias) * dt)
+            gyro_raw_dps = self.robot.gyroscope_z()
+            gyro_delta_rad = math.radians((gyro_raw_dps - self._gyro_bias) * dt)
+            theta_before_deg = math.degrees(self.est_pose.theta)
+            distance_m = (delta_left_m + delta_right_m) / 2.0
+            if left_cmd > 0.0 or right_cmd > 0.0:
+                # Checking whether distance_m is really positive during a nominally-forward
+                # (possibly curved/unequal-wheel) command, at whatever the current theta is --
+                # not just the pure-straight case already verified earlier.
+                print(f"[distance debug] cmd=({left_cmd:.1f},{right_cmd:.1f}) theta={theta_before_deg:.1f}deg "
+                      f"delta_left_m={delta_left_m:.5f} delta_right_m={delta_right_m:.5f} distance_m={distance_m:.5f}")
             self.est_pose = integrate_wheel_distances(
                 self.est_pose, delta_left_m, delta_right_m, wheel_base_m=0.0956, gyro_delta_rad=gyro_delta_rad
             )
+            if abs(gyro_raw_dps - self._gyro_bias) > 5.0:
+                # Triggers on any sensed rotation, not just commanded turns -- lets this
+                # catch a hand-rotation test (cmd stays (0,0), only the gyro moves).
+                print(f"[rotation debug] cmd=({left_cmd:.1f},{right_cmd:.1f}) gyro_raw_dps={gyro_raw_dps:.2f} "
+                      f"theta {theta_before_deg:.1f}deg -> {math.degrees(self.est_pose.theta):.1f}deg")
             self.robot.pose = self.est_pose  # ground truth 없음 -- 추정치를 그대로 미러링
 
         # LiDAR + (optional) scan matching correction + map accumulation
@@ -466,11 +494,26 @@ class BeagleSimulator:
         fig.text(0.5, 0.015,
                  'E: Toggle SLAM   N: Change noise   T: Show trajectory   C: Clear trajectory   M: Save map   R: Reset map   Q: Quit',
                  ha='center', fontsize=9, color='#4A5568')
-        x0, y0, x1, y1 = self.bounds
 
         previous = time.monotonic()
+        try:
+            self._run_loop(fig, ax_world, ax_map, previous)
+        finally:
+            self.robot.stop()
+        plt.close(fig)
+        print('Simulator exit')
+
+    def _run_loop(self, fig, ax_world, ax_map, previous: float) -> None:
+        x0, y0, x1, y1 = self.bounds
         while self.running and plt.fignum_exists(fig.number):
-            now = time.monotonic(); dt = min(0.15, now - previous); previous = now
+            # Confirmed 2026-08-27: real matplotlib rendering routinely takes 0.28-0.4s+ per
+            # frame (image redraw, scatter, occupancy grid), well over the old 0.15s cap --
+            # gyro integration (rate * dt) was silently discarding most of each frame's real
+            # elapsed time, undercounting rotation by ~3-4x. Encoder-based translation was
+            # unaffected (count-based, not dt-based), which is why only rotation looked wrong.
+            # Raised to 1.0s: still guards against a genuine multi-second stall/pause, but no
+            # longer clips normal frame timing.
+            now = time.monotonic(); dt = min(1.0, now - previous); previous = now
             self.step(dt)
 
             true_pose = self.robot.pose
@@ -527,8 +570,6 @@ class BeagleSimulator:
 
             fig.canvas.draw_idle()
             plt.pause(0.03)
-        plt.close(fig)
-        print('Simulator exit')
 
 
 # ---------------------------------------------------------------- Map editor
@@ -598,10 +639,15 @@ def main() -> None:
                         help='default | room | room_exit | corridor | open')
     parser.add_argument('--map', dest='map_file', default=None, help='Path to JSON map file')
     parser.add_argument('--slam', action='store_true', help='Use scan matching pose correction')
+    parser.add_argument('--real', action='store_true',
+                        help='Drive the real robot instead of dry-run simulation')
     parser.add_argument('--odom-noise', type=float, default=0.06,
-                        help='Odometry noise standard deviation (0=perfect, 0.1=large)')
+                        help='Odometry noise standard deviation (0=perfect, 0.1=large; dry-run only)')
     parser.add_argument('--edit', metavar='SAVE_JSON', default=None,
                         help='Run the map editor and save to the given JSON file')
+    parser.add_argument('--start-theta', type=float, default=None,
+                        help='Override starting heading in degrees (match how the real robot is '
+                             'actually facing -- the scene/map default is just an assumption, not measured)')
     args = parser.parse_args()
 
     if args.edit:
@@ -613,7 +659,11 @@ def main() -> None:
     else:
         segments, start = build_scene(args.scene)
 
-    sim = BeagleSimulator(segments, start, odom_noise=args.odom_noise, use_slam=args.slam)
+    if args.start_theta is not None:
+        start = Pose2D(start.x, start.y, math.radians(args.start_theta))
+
+    sim = BeagleSimulator(segments, start, odom_noise=args.odom_noise, use_slam=args.slam,
+                          dry_run=not args.real)
     sim.run()
 
 

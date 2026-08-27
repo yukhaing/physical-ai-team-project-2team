@@ -5,18 +5,19 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-"""YOLO class 신호 + OMX box-placed 신호로 구동되는 전체 미션을 matplotlib 창에서 확인합니다.
-신호는 TriggerServer(TCP+JSON)로 받습니다 -- scripts\\05_send_trigger.py로 테스트하거나,
-나중에는 실제 YOLO/OMX 코드가 같은 형식으로 메시지를 보내면 됩니다.
+"""receiving zone <-> defect zone 왕복 배달만 하는 미션을 matplotlib 창에서 확인합니다
+(OMX box-placed 신호로 구동 -- YOLO class 신호/start/normal zone 없음).
+신호는 TriggerServer(TCP+JSON)로 받습니다 -- scripts\\05_send_trigger.py --box-placed로
+테스트하거나, 나중에는 실제 OMX 코드가 같은 형식으로 메시지를 보내면 됩니다.
 
 이동 방법: A* + pure pursuit (beagle_sim.py의 set_goal() 그대로 사용).
 같은 미션을 line-following으로 돌려보려면 scripts\\07_mission_visual_line.py를 실행하세요.
 
-방 배치는 실제 코스 그림(정사각형 방, 좌상단 Normal, 우상단 Defect, 하단 중앙
-Receiving zone, 우하단 Start)에 맞췄습니다. 각 zone은 점이 아니라 실제 크기의
-사각형(ZONE_SIZE)으로 그려서 로봇이 그 안에 실제로 들어갔는지 눈으로 바로
-확인할 수 있습니다("앞에 멈춤"과 "안에 들어감"을 구분하기 위함).
-목적지(정상/불량 zone)에 도착하면 5초간 대기 후 자동으로 복귀합니다.
+각 zone은 점이 아니라 실제 크기의 사각형(ZONE_SIZE)으로 그려서 로봇이 그 안에 실제로
+들어갔는지 눈으로 바로 확인할 수 있습니다("앞에 멈춤"과 "안에 들어감"을 구분하기 위함).
+
+동작: 항상 receiving zone에서 대기 -> box-placed 신호 -> defect zone 이동 -> 5초 대기
+-> receiving zone 복귀 -> 대기, 반복.
 
 --dry-run 플래그로 시뮬레이션과 실물을 전환합니다 (코드 주석 처리 없이).
   --dry-run 있음: 지금까지와 동일한 시뮬레이션 (MockBeagle) + 시각화.
@@ -27,6 +28,7 @@ Receiving zone, 우하단 Start)에 맞췄습니다. 각 zone은 점이 아니�
 """
 
 import argparse
+from dataclasses import dataclass, field
 import math
 import time
 
@@ -37,22 +39,17 @@ from common.comm import TriggerServer
 from common.geometry import Pose2D, polar_to_xy
 from common.lidar import cardinal_distances, valid_fraction
 from common.localization import localize, resolve_180_ambiguity, scan_multiple
-from common.mission import Mission
 from common.motion import align_to_heading_command
 from common.robot import rectangle_segments
 from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursuit_target
 
 ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "start": (0.12, 0.12),
-    "receiving": (0.43, 0.38),
-    "normal": (0.78, 0.58),
+    "receiving": (0.37, 0.34),
     "defect": (0.78, 0.12),
 }
 ZONE_COLORS = {
-    "start": "#16C3B2",
     "receiving": "#F5A623",
-    "normal": "#3B4CCA",
     "defect": "#D0021B",
 }
 ROOM_WIDTH_M = 0.90
@@ -61,13 +58,58 @@ ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, ROOM_WIDTH_M, ROOM_HEIGHT_M)  # 실
 # 사각형 벽만으로는 방 중심 기준 180도 대칭이라 LiDAR 매칭만으로는 실제 위치와 그 반대편
 # (예: (0,0) 근처를 (0.9,0.7) 근처로 착각)을 구분할 수 없음 -- OMX 로봇팔(15번 스크립트와
 # 동일 실측 위치)을 비대칭 기준물로 넣어야 localize_robot()이 어느 쪽인지 제대로 구분함.
-OMX_CENTER = (0.17, 0.37)
+OMX_CENTER = (0.17, 0.65)  # measured 2026-08-27; was (0.17, 0.37) -- 28cm off, likely stale/wrong
 OMX_RADIUS = 0.065
 OBSTACLE = rectangle_segments(
     OMX_CENTER[0] - OMX_RADIUS, OMX_CENTER[1] - OMX_RADIUS,
     OMX_CENTER[0] + OMX_RADIUS, OMX_CENTER[1] + OMX_RADIUS,
 )
 SEGMENTS = ROOM_BOUNDARY + OBSTACLE
+
+
+@dataclass
+class DeliveryMission:
+    """receiving zone에서 대기 -> box_placed 신호 -> defect zone 이동 -> 도착 시
+    DWELL_SECONDS 대기 -> receiving zone 복귀 -> 대기, 무한 반복.
+
+    상태: WAIT_FOR_BOX -> MOVE_TO_ZONE -> AT_DESTINATION -> RETURN_TO_RECEIVING -> WAIT_FOR_BOX
+    """
+
+    zones: dict[str, tuple[float, float]]
+    state: str = "WAIT_FOR_BOX"
+    state_started: float = field(default_factory=time.monotonic)
+    DWELL_SECONDS: float = 5.0
+
+    def on_box_placed(self) -> None:
+        if self.state != "WAIT_FOR_BOX":
+            return
+        self._set_state("MOVE_TO_ZONE")
+
+    def target_zone(self) -> tuple[float, float] | None:
+        if self.state == "MOVE_TO_ZONE":
+            return self.zones["defect"]
+        if self.state == "RETURN_TO_RECEIVING":
+            return self.zones["receiving"]
+        return None
+
+    def notify_arrived(self) -> None:
+        if self.state == "MOVE_TO_ZONE":
+            self._set_state("AT_DESTINATION")
+        elif self.state == "RETURN_TO_RECEIVING":
+            self._set_state("WAIT_FOR_BOX")
+
+    def tick(self) -> None:
+        if self.state == "AT_DESTINATION" and time.monotonic() - self.state_started >= self.DWELL_SECONDS:
+            self._set_state("RETURN_TO_RECEIVING")
+
+    def dwell_remaining(self) -> float:
+        if self.state != "AT_DESTINATION":
+            return 0.0
+        return max(0.0, self.DWELL_SECONDS - (time.monotonic() - self.state_started))
+
+    def _set_state(self, new_state: str) -> None:
+        self.state = new_state
+        self.state_started = time.monotonic()
 
 
 def draw_lidar_view(ax, scan_mm: list[float]) -> None:
@@ -111,30 +153,47 @@ def draw_zones(ax) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--start-theta", type=float, default=None,
+                        help="Override the LiDAR-detected starting heading in degrees "
+                             "(use if localize()/resolve_180_ambiguity() picks the wrong heading)")
     args = parser.parse_args()
 
     sim = BeagleSimulator(
         SEGMENTS,
-        Pose2D(*ZONES["start"], math.atan2(
-            ZONES["receiving"][1] - ZONES["start"][1], ZONES["receiving"][0] - ZONES["start"][0]
+        Pose2D(*ZONES["receiving"], math.atan2(
+            ZONES["defect"][1] - ZONES["receiving"][1], ZONES["defect"][0] - ZONES["receiving"][0]
         )),
         odom_noise=0.06, use_slam=True, dry_run=args.dry_run,
     )
 
-    # 실물은 로봇이 start zone 안 정확히 어디에, 어느 방향으로 놓였는지 알 수 없으므로
+    # 실물은 로봇이 receiving zone 안 정확히 어디에, 어느 방향으로 놓였는지 알 수 없으므로
     # (dry-run처럼 정확한 시작 pose를 가정할 수 없음) LiDAR로 실제 위치/heading을 먼저
-    # 찾습니다. start에서 충분히 떨어져 있으면 미션을 "WAIT"이 아니라 "RETURN_TO_START"로
-    # 시작해서, 기존 루프가 그대로 start로 이동시킨 뒤 자동으로 WAIT으로 넘어가게 합니다.
-    initial_state = "WAIT"
+    # 찾습니다. receiving에서 충분히 떨어져 있으면 미션을 "WAIT_FOR_BOX"가 아니라
+    # "RETURN_TO_RECEIVING"으로 시작해서, 기존 루프가 그대로 그쪽으로 이동시킨 뒤 자동으로
+    # WAIT_FOR_BOX로 넘어가게 합니다.
+    initial_state = "WAIT_FOR_BOX"
     if not args.dry_run:
         print("실제 시작 위치 파악 중 (제자리에서 LiDAR 스캔)...")
         scan = scan_multiple(sim.robot)
-        detected_pose, match_err_m = localize(scan, SEGMENTS, *ZONES["start"], search_radius=0.3)
+        # OMX_CENTER is a rough hand-measurement, not surveyed -- feeding an uncertain
+        # obstacle position into the match score can pull localize() toward a wrong local
+        # optimum (seen 2026-08-27: 14cm position error while placed exactly at receiving,
+        # with a deceptively low 8mm match error). Matching against the room rectangle only
+        # removes that risk; the tradeoff is losing OMX as a 180-degree-ambiguity landmark,
+        # so resolve_180_ambiguity() may pick the wrong (mirrored) heading. The real OMX
+        # obstacle stays in SEGMENTS for A* planning/collision-avoidance -- only localization
+        # skips it.
+        LOCALIZE_SEGMENTS = ROOM_BOUNDARY
+        detected_pose, match_err_m = localize(scan, LOCALIZE_SEGMENTS, *ZONES["receiving"], search_radius=0.3)
         # 격자 탐색 해상도 때문에 180도 대칭 쌍(예: (0,0) 근처 vs (0.9,0.7) 근처) 중 더 잘
         # 맞는 쪽을 놓쳤을 수 있으니, 그 두 후보만 정밀하게 다시 채점해서 최종 확정합니다.
         detected_pose, match_err_m = resolve_180_ambiguity(
-            scan, SEGMENTS, detected_pose, ROOM_WIDTH_M, ROOM_HEIGHT_M
+            scan, LOCALIZE_SEGMENTS, detected_pose, ROOM_WIDTH_M, ROOM_HEIGHT_M
         )
+        if args.start_theta is not None:
+            print(f"[--start-theta override] localize() said {math.degrees(detected_pose.theta) % 360.0:.0f}deg, "
+                  f"forcing {args.start_theta:.0f}deg instead")
+            detected_pose = Pose2D(detected_pose.x, detected_pose.y, math.radians(args.start_theta))
         heading_deg = math.degrees(detected_pose.theta) % 360.0
         print(
             f"추정 위치: ({detected_pose.x:.3f}, {detected_pose.y:.3f}) heading={heading_deg:.0f}deg "
@@ -142,14 +201,16 @@ def main() -> None:
         )
         sim.est_pose = detected_pose
         sim.robot.pose = detected_pose  # ground truth 없음 -- 추정치를 그대로 미러링
-        dist_to_start = math.hypot(detected_pose.x - ZONES["start"][0], detected_pose.y - ZONES["start"][1])
-        if dist_to_start > 0.05:
-            print(f"start zone과 {dist_to_start * 100:.0f}cm 떨어져 있습니다 -- 먼저 그쪽으로 이동합니다.")
-            initial_state = "RETURN_TO_START"
+        dist_to_receiving = math.hypot(
+            detected_pose.x - ZONES["receiving"][0], detected_pose.y - ZONES["receiving"][1]
+        )
+        if dist_to_receiving > 0.05:
+            print(f"receiving zone과 {dist_to_receiving * 100:.0f}cm 떨어져 있습니다 -- 먼저 그쪽으로 이동합니다.")
+            initial_state = "RETURN_TO_RECEIVING"
         else:
-            print("이미 start zone 근처입니다.")
+            print("이미 receiving zone 근처입니다.")
 
-    mission = Mission(zones=ZONES, state=initial_state)
+    mission = DeliveryMission(zones=ZONES, state=initial_state)
     server = TriggerServer(host="0.0.0.0", port=8765)
     server.start()
 
@@ -181,10 +242,8 @@ def main() -> None:
             previous = now
 
             for message in server.poll():
-                if "class" in message:
-                    mission.on_yolo_class(message["class"])
-                elif message.get("event") == "box_placed":
-                    mission.on_omx_box_placed()
+                if message.get("event") == "box_placed":
+                    mission.on_box_placed()
 
             mission.tick()
 
@@ -211,9 +270,7 @@ def main() -> None:
             sim.step(dt)
             scan = sim.robot.lidar()
 
-            if sim.status == "GOAL!" and mission.state in {
-                "MOVE_TO_RECEIVING", "MOVE_TO_ZONE", "RETURN_TO_START",
-            }:
+            if sim.status == "GOAL!" and mission.state in {"MOVE_TO_ZONE", "RETURN_TO_RECEIVING"}:
                 mission.notify_arrived()
 
             true_trail.append((sim.robot.pose.x, sim.robot.pose.y))
@@ -235,9 +292,6 @@ def main() -> None:
             ax.clear()
             for sx, sy, ex, ey in ROOM_BOUNDARY:
                 ax.plot([sx, ex], [sy, ey], color="#33415F", linewidth=3)
-            for i, (sx, sy, ex, ey) in enumerate(OBSTACLE):
-                ax.plot([sx, ex], [sy, ey], color="#E8590C", linewidth=5,
-                        label="Obstacle (OMX)" if i == 0 else "_nolegend_")
             draw_zones(ax)
             for i, leg_path in enumerate(all_paths):
                 draw_planned_path(ax, leg_path, label="A* Path" if i == 0 else "_nolegend_")
@@ -252,12 +306,11 @@ def main() -> None:
             ax.plot(sim.est_pose.x, sim.est_pose.y, "x", color="#2C74F5", markersize=9)
             ax.set_aspect("equal")
             ax.grid(True, alpha=0.3)
-            box_tag = f" ({mission.box_class})" if mission.box_class else ""
             dwell_tag = f" | waiting {mission.dwell_remaining():.1f}s" if mission.state == "AT_DESTINATION" else ""
             phase_tag = f" [{leg_phase}]" if mission.target_zone() is not None else ""
             mode_tag = "DRY-RUN" if args.dry_run else "REAL"
             ax.set_title(
-                f"Mission: {mission.state}{box_tag}{dwell_tag}{phase_tag} | {mode_tag} | listening on :8765 | Q=quit"
+                f"Mission: {mission.state}{dwell_tag}{phase_tag} | {mode_tag} | listening on :8765 | Q=quit"
             )
             ax.legend(loc="lower left", fontsize=8)
 

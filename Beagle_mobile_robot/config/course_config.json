@@ -39,6 +39,8 @@
   "mission": {
     "dwell_seconds": 5.0,
     "box_flag_path": "signals/box_placed.flag",
-    "simulate_signal_interval_s": 3.0
+    "simulate_signal_interval_s": 3.0,
+    "receiving_align_percent": 6.0,
+    "receiving_align_duration_s": 2.0
   }
 }
