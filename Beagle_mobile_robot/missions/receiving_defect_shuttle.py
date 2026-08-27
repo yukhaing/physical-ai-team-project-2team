@@ -267,7 +267,6 @@ class ShuttleMission:
         self.cycles_done = 0
         self._gyro_bias = 0.0
         self._previous_time = 0.0
-        self._started_before = False
 
     def _send(self, text: str, **extra: object) -> None:
         if self.status_client is not None:
@@ -321,9 +320,7 @@ class ShuttleMission:
                 self._send("출발", to="receiving_zone")
                 self._send("대기 존으로 이동중")
             elif self.state == "GOTO_RECEIVING" and new_state == "WAIT_SIGNAL":
-                if self._started_before:
-                    self._send("도착", at="receiving_zone")
-                self._started_before = True
+                self._send("도착", at="receiving_zone")
 
             if new_state == "DWELL_DEFECT":
                 self.dwell_started = now
@@ -358,8 +355,8 @@ class ShuttleMission:
         }
 
 
-def run_mission(robot: SafeBeagle, box_signal: BoxSignal, settings: MissionSettings, *, duration_s: float, cycles: int, output_path: str, visualizer=None) -> str:
-    mission = ShuttleMission(robot, box_signal, settings)
+def run_mission(robot: SafeBeagle, box_signal: BoxSignal, settings: MissionSettings, *, duration_s: float, cycles: int, output_path: str, visualizer=None, status_client: StatusClient | None = None) -> str:
+    mission = ShuttleMission(robot, box_signal, settings, status_client=status_client)
     mission.start()
     start = time.monotonic()
     deadline = start + duration_s if duration_s > 0 else math.inf
@@ -395,36 +392,44 @@ def main() -> None:
     parser.add_argument("--config", default=None, help="path to course_config.json (default: config/course_config.json)")
     parser.add_argument("--duration", type=float, default=0.0, help="seconds; 0 = run until Ctrl+C or --cycles")
     parser.add_argument("--cycles", type=int, default=0, help="stop after N receiving->defect->receiving round trips (0 = unlimited)")
-    parser.add_argument("--box-flag", default=None, help="override the box-placed flag file path from config")
-    parser.add_argument("--simulate-signal-interval", type=float, default=None, help="dry-run only: override the auto-trigger interval from config")
+    parser.add_argument("--trigger-port", type=int, default=8765, help="port to listen on for OMX's box-placed signal")
+    parser.add_argument("--status-host", default=None, help="dashboard host to send status updates to (omit to disable)")
+    parser.add_argument("--status-port", type=int, default=9000, help="dashboard port to send status updates to")
     parser.add_argument("--output", default="logs/shuttle_mission.csv")
     parser.add_argument("--visualize", action="store_true", help="show a live top-down plot of the mission")
     args = parser.parse_args()
 
     settings = load_settings(args.config)
-    box_flag_path = args.box_flag or settings.box_flag_path
-    simulate_after_s = args.simulate_signal_interval if args.simulate_signal_interval is not None else settings.simulate_signal_interval_s
-    
-    # TEMP for step 2 testing — step 4 replaces this with a --trigger-port CLI flag
-    trigger_server = TriggerServer(port=8765)
+
+    trigger_server = TriggerServer(port=args.trigger_port)
     trigger_server.start()
     box_signal = BoxSignal(trigger_server)
 
-    with SafeBeagle(dry_run=args.dry_run, scene=args.scene, max_speed=settings.nav_max_percent) as robot:
-        robot.start_lidar()
-        robot.wait_until_lidar_ready()
+    status_client = None
+    if args.status_host is not None:
+        status_client = StatusClient(args.status_host, args.status_port)
+        status_client.start()
 
-        visualizer = None
-        if args.visualize:
-            from common.visualize import ShuttleVisualizer
+    try:
+        with SafeBeagle(dry_run=args.dry_run, scene=args.scene, max_speed=settings.nav_max_percent) as robot:
+            robot.start_lidar()
+            robot.wait_until_lidar_ready()
 
-            segments = robot.robot.segments if args.dry_run else rectangle_segments(0.0, 0.0, settings.boundary_x_m, settings.boundary_y_m)
-            visualizer = ShuttleVisualizer(settings, segments)
+            visualizer = None
+            if args.visualize:
+                from common.visualize import ShuttleVisualizer
 
-        result = run_mission(robot, box_signal, settings, duration_s=args.duration, cycles=args.cycles, output_path=args.output, visualizer=visualizer)
-        print("mission result:", result)
-        if visualizer is not None:
-            visualizer.finish(result)
+                segments = robot.robot.segments if args.dry_run else rectangle_segments(0.0, 0.0, settings.boundary_x_m, settings.boundary_y_m)
+                visualizer = ShuttleVisualizer(settings, segments)
+
+            result = run_mission(robot, box_signal, settings, duration_s=args.duration, cycles=args.cycles, output_path=args.output, visualizer=visualizer, status_client=status_client)
+            print("mission result:", result)
+            if visualizer is not None:
+                visualizer.finish(result)
+    finally:
+        trigger_server.stop()
+        if status_client is not None:
+            status_client.stop()
 
 
 if __name__ == "__main__":
