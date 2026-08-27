@@ -156,6 +156,11 @@ def main() -> None:
     parser.add_argument("--start-theta", type=float, default=None,
                         help="Override the LiDAR-detected starting heading in degrees "
                              "(use if localize()/resolve_180_ambiguity() picks the wrong heading)")
+    parser.add_argument("--known-start", action="store_true",
+                        help="Skip LiDAR localize() entirely and assume the robot is placed "
+                             "exactly at ZONES['receiving'] with heading --start-theta (default 0). "
+                             "Use when you physically place the robot at a fixed, known pose every "
+                             "time, to remove localization error/instability as a variable.")
     args = parser.parse_args()
 
     sim = BeagleSimulator(
@@ -172,7 +177,15 @@ def main() -> None:
     # "RETURN_TO_RECEIVING"으로 시작해서, 기존 루프가 그대로 그쪽으로 이동시킨 뒤 자동으로
     # WAIT_FOR_BOX로 넘어가게 합니다.
     initial_state = "WAIT_FOR_BOX"
-    if not args.dry_run:
+    if args.known_start:
+        theta = math.radians(args.start_theta) if args.start_theta is not None else 0.0
+        detected_pose = Pose2D(*ZONES["receiving"], theta)
+        print(f"[--known-start] Skipping localize() -- assuming pose ({detected_pose.x:.3f}, "
+              f"{detected_pose.y:.3f}) heading={math.degrees(theta):.0f}deg")
+        sim.est_pose = detected_pose
+        sim.robot.pose = detected_pose
+        print("이미 receiving zone 근처입니다.")
+    elif not args.dry_run:
         print("실제 시작 위치 파악 중 (제자리에서 LiDAR 스캔)...")
         scan = scan_multiple(sim.robot)
         # OMX_CENTER is a rough hand-measurement, not surveyed -- feeding an uncertain

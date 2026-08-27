@@ -386,6 +386,13 @@ class BeagleSimulator:
                 self.pp_target_point = self.auto_path[target_index]
             left_pct, right_pct = twist_to_wheel_percent(v, omega)
             self.cmd = (max(-15, min(15, left_pct)), max(-15, min(15, right_pct)))
+            if 0 <= target_index < len(self.auto_path):
+                tx, ty = self.auto_path[target_index]
+                bearing_deg = math.degrees(math.atan2(ty - self.est_pose.y, tx - self.est_pose.x))
+                print(f"[pursuit debug] pose=({self.est_pose.x:.3f},{self.est_pose.y:.3f}) "
+                      f"theta={math.degrees(self.est_pose.theta):.1f}deg target=({tx:.3f},{ty:.3f}) "
+                      f"bearing={bearing_deg:.1f}deg v={v:.3f} omega={omega:.3f} "
+                      f"wheel=({self.cmd[0]:.1f},{self.cmd[1]:.1f})")
             gx, gy = self.auto_path[-1]
             # 0.08 (8cm) was nearly as big as the 21cm zone's own half-width (10.5cm), so it
             # accepted "near the edge" as arrived instead of driving to the actual center.

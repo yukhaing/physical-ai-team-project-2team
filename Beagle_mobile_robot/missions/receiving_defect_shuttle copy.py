@@ -228,6 +228,8 @@ class BoxSignal:
     def is_set(self) -> bool:
         for message in self.server.poll():
             if message.get("event") == "box_placed":
+                if not self._got_signal:
+                    print("BoxSignal: box_placed received")
                 self._got_signal = True
         return self._got_signal
 
