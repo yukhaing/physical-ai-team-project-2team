@@ -34,8 +34,8 @@ install(TARGETS omx_target_panel
   LIBRARY DESTINATION lib
 )
 install(PROGRAMS
+  scripts/box_target_pose_bridge_node.py
   scripts/place_keyboard_teach_node.py
-  scripts/camera_homography_target_node.py
   scripts/camera_homography_7point_calibration_node.py
   scripts/movej_staging_node.py
   scripts/movej_xy_approach_node.py
@@ -46,15 +46,17 @@ install(PROGRAMS
   scripts/gripper_open_node.py
   scripts/movej_smooth_relay_node.py
   scripts/pick_coordinator_node.py
-  scripts/yolo_detection_node.py
+  scripts/rule_based_pick_node.py
   scripts/yolo_target_bridge_node.py
+  scripts/camera_homography_target_node.py
+  scripts/yolo_detection_node.py
   scripts/beagle_adapter_node.py
   scripts/sorting_orchestrator_node.py
   scripts/operations_log_node.py
   scripts/omx_console.py
   DESTINATION lib/${PROJECT_NAME}
 )
-install(DIRECTORY launch config rviz calibration DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})
 
 ament_export_include_directories(include)
 ament_export_targets(export_${PROJECT_NAME})

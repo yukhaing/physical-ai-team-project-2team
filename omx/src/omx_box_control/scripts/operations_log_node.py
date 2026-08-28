@@ -11,6 +11,27 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 
+FAILURE_LABELS = {
+    'box_pick_failed': '박스 집기 실패',
+    'box_place_failed': '박스 배치 실패',
+    'beagle_disconnected': 'Beagle 연결 끊김',
+    'beagle_operation_failed': 'Beagle 동작 실패',
+    'omx_operation_failed': 'OMX 동작 실패',
+}
+
+
+def failure_label(event):
+    failure_type = str(event.get('failure_type') or '').strip()
+    if failure_type in FAILURE_LABELS:
+        return FAILURE_LABELS[failure_type]
+    reason = str(event.get('reason') or '').lower()
+    if 'beagle' in reason and any(token in reason for token in ('disconnect', 'connection lost')):
+        return FAILURE_LABELS['beagle_disconnected']
+    if any(token in reason for token in ('pick', 'grasp', 'gripper')):
+        return FAILURE_LABELS['box_pick_failed']
+    return '작업 실패'
+
+
 class OperationsLog(Node):
     def __init__(self):
         super().__init__('operations_log')
@@ -25,6 +46,12 @@ class OperationsLog(Node):
             confidence REAL, pixel_x REAL, pixel_y REAL, robot_x REAL, robot_y REAL,
             beagle_destination TEXT, omx_result TEXT NOT NULL, beagle_return_result TEXT
         )''')
+        columns = {
+            row[1] for row in self.db.execute('PRAGMA table_info(operations)')}
+        if 'failure_type' not in columns:
+            self.db.execute('ALTER TABLE operations ADD COLUMN failure_type TEXT')
+        if 'failure_reason' not in columns:
+            self.db.execute('ALTER TABLE operations ADD COLUMN failure_reason TEXT')
         self.db.commit()
         self.recent_pub = self.create_publisher(
             String, str(self.get_parameter('recent_log_topic').value), 10)
@@ -36,7 +63,8 @@ class OperationsLog(Node):
         except json.JSONDecodeError:
             return
         if event.get('event') == 'awaiting_operator_unload':
-            timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds')
+            timestamp = datetime.now(timezone.utc).astimezone().strftime(
+                '%Y-%m-%d %H:%M:%S')
             label = 'defect'
             self.db.execute('''INSERT OR REPLACE INTO operations
                 (job_id, completed_at, classification, confidence, pixel_x, pixel_y,
@@ -46,9 +74,25 @@ class OperationsLog(Node):
                     event.get('y'), event.get('robot_x'), event.get('robot_y'),
                     'defect_loading', 'placed_waiting_operator', 'pending'))
             self.db.commit()
-            # GUI intentionally receives only these two fields.
+            # Keep the operator view deliberately compact and Korean-only.
             self.recent_pub.publish(String(data=json.dumps({
-                'completed_at': timestamp, 'classification': 'defect awaiting operator unload'})))
+                'time': timestamp[-8:], 'status': '성공'})))
+        elif event.get('event') == 'cycle_failed':
+            timestamp = datetime.now(timezone.utc).astimezone().strftime(
+                '%Y-%m-%d %H:%M:%S')
+            self.db.execute('''INSERT OR REPLACE INTO operations
+                (job_id, completed_at, classification, confidence, pixel_x, pixel_y,
+                 robot_x, robot_y, beagle_destination, omx_result, beagle_return_result,
+                 failure_type, failure_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
+                    event.get('job_id'), timestamp, 'defect', event.get('confidence'),
+                    event.get('x'), event.get('y'), event.get('robot_x'),
+                    event.get('robot_y'), 'defect_loading',
+                    event.get('failure_type') or 'failed', 'not_started',
+                    event.get('failure_type'), event.get('reason')))
+            self.db.commit()
+            self.recent_pub.publish(String(data=json.dumps({
+                'time': timestamp[-8:], 'status': failure_label(event)})))
         elif event.get('event') == 'return_completed':
             self.db.execute('UPDATE operations SET beagle_return_result = ? WHERE job_id = ?',
                             ('completed', event['job_id']))

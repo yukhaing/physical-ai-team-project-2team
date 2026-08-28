@@ -26,9 +26,9 @@ movej_lift:
     height_reward: 0.0
     path_samples: 51
     gripper_joint_name: gripper_joint_1
-    min_grasp_position: 0.05
+    min_grasp_position: 0.15
     max_grasp_position: 0.70
-    max_gripper_change: 0.07
+    max_gripper_change: 0.05
     # Match the approved low-box pick band (25-38mm).
     min_start_z: 0.025
     max_start_z: 0.120
@@ -47,7 +47,12 @@ movej_lift:
     max_command_z: 0.210
     # Validated loaded-rise residual compensation on 2026-08-06.
     joint_goal_compensation: [0.0, -0.06, -0.04, 0.0, 0.0]
-    move_duration: 6.0
-    minimum_completion_time: 7.0
-    settle_time: 0.15
+    # Restore the camera-aligned gripper roll while raising the grasped box.
+    reset_joint5_during_lift: true
+    lift_target_joint5: 0.0
+    maximum_lift_joint5_delta: 0.80
+    lift_joint5_tolerance: 0.05
+    move_duration: 5.0
+    minimum_completion_time: 5.7
+    settle_time: 0.10
     timeout: 15.0

@@ -15,6 +15,6 @@ camera_homography_target:
     warning_reach_radius: 0.285
     workspace_marker_z: 0.002
     # The independent OMX 7-point calibration node writes this runtime file.
-    calibration_file: /root/omx_box_project_ws/runtime/calibration/active.yaml
-    calibration_seed_file: ''
+    calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/active.yaml
+    calibration_seed_file: /root/omx_box_project_ws/integration/omx_box_system/calibration/omx_camera_homography_7point.yaml
     show_window: true

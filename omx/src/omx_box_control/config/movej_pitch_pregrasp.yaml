@@ -35,14 +35,14 @@ movej_pitch_pregrasp:
     xy_weight: 20000.0
     joint_delta_weight: 0.02
     height_reward: 0.0
-    move_duration: 4.0
+    move_duration: 3.0
     # Include controller settle, terminal trim, and application settle.
-    minimum_completion_time: 5.0
+    minimum_completion_time: 3.7
     # Physical validation reached the Cartesian target (2.02mm XY, 134.7mm Z)
     # with up to 0.0438rad residual joint error. Include that measured deadband
     # while retaining the independent XY, Z, and pitch completion gates.
     # 2026-08-11: measured Cartesian pose was valid while the maximum residual
     # joint error was 0.0473rad (2.71deg). Keep independent XY/Z/pitch gates.
     joint_tolerance: 0.050
-    settle_time: 0.15
+    settle_time: 0.10
     timeout: 12.0

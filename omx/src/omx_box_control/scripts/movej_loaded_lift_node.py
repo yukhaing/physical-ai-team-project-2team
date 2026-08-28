@@ -16,7 +16,7 @@ class MoveJLoadedLift(MoveJXyApproach):
         super().__init__()
         extras = {
             'gripper_joint_name': 'gripper_joint_1',
-            'min_grasp_position': 0.05,
+            'min_grasp_position': 0.15,
             'max_grasp_position': 0.60,
             'max_gripper_change': 0.05,
             'min_start_z': 0.075,
@@ -30,6 +30,10 @@ class MoveJLoadedLift(MoveJXyApproach):
             'max_path_drop': 0.001,
             'max_command_z': 0.170,
             'joint_goal_compensation': [0.0, -0.06, -0.04, 0.0, 0.0],
+            'reset_joint5_during_lift': True,
+            'lift_target_joint5': 0.0,
+            'maximum_lift_joint5_delta': 0.80,
+            'lift_joint5_tolerance': 0.05,
         }
         for name, value in extras.items():
             self.declare_parameter(name, value)
@@ -53,10 +57,12 @@ class MoveJLoadedLift(MoveJXyApproach):
         rise = float(pose[2] - self.start_pose[2])
         xy_shift = float(np.linalg.norm(pose[:2] - self.start_pose[:2]))
         gripper_change = abs(gripper - self.start_gripper)
+        joint5_error = abs(actual[4] - float(self.p('lift_target_joint5')))
         summary = (
             f'Z={pose[2]:.4f}m, rise={rise*1000:.1f}mm, '
             f'XY shift={xy_shift*1000:.2f}mm, '
             f'pitch={math.degrees(float(np.sum(actual[1:4]))):.2f}deg, '
+            f'joint5={math.degrees(float(actual[4])):.2f}deg, '
             f'gripper={gripper:.4f}rad')
         if not float(self.p('min_grasp_position')) <= gripper <= float(self.p('max_grasp_position')):
             return summary, 'gripper is outside the grasp range'
@@ -68,6 +74,11 @@ class MoveJLoadedLift(MoveJXyApproach):
             return summary, 'actual rise is outside the safe band'
         if xy_shift > float(self.p('max_actual_xy_shift')):
             return summary, 'actual XY shift exceeds the gross-motion safety limit'
+        if (bool(self.p('reset_joint5_during_lift')) and
+                joint5_error > float(self.p('lift_joint5_tolerance'))):
+            return summary, (
+                f'joint5 reset error is too large: '
+                f'{math.degrees(joint5_error):.1f}deg')
         return summary, ''
 
     def on_confirm(self, _request, response):
@@ -88,8 +99,17 @@ class MoveJLoadedLift(MoveJXyApproach):
                 f'start Z={start_pose[2]:.4f}m is outside loaded-lift range')
             return response
         target_xy = start_pose[:2].copy()
+        target_joint5 = None
+        if bool(self.p('reset_joint5_during_lift')):
+            target_joint5 = float(self.p('lift_target_joint5'))
+            joint5_delta = abs(target_joint5 - start[4])
+            if joint5_delta > float(self.p('maximum_lift_joint5_delta')):
+                response.success, response.message = False, (
+                    f'joint5 reset change is too large: '
+                    f'{math.degrees(joint5_delta):.1f}deg')
+                return response
         try:
-            nominal = self.plan(start, target_xy)
+            nominal = self.plan(start, target_xy, target_joint5)
         except Exception as exception:
             response.success, response.message = False, f'nominal lift planning failed: {exception}'
             return response
@@ -120,6 +140,7 @@ class MoveJLoadedLift(MoveJXyApproach):
             f'start Z={start_pose[2]:.4f}m, nominal Z={self.fk(nominal)[2]:.4f}m, '
             f'command Z={command_pose[2]:.4f}m, path min={path_min:.4f}m, '
             f'command XY shift={command_xy_shift*1000:.2f}mm, '
+            f'joint5={math.degrees(float(goal[4])):.2f}deg, '
             f'compensation={[round(value, 4) for value in compensation]}')
         if self.p('dry_run'):
             response.success, response.message = False, f'dry_run=true; {details}'

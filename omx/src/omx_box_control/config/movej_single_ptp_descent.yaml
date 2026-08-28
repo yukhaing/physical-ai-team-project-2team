@@ -29,10 +29,10 @@ movej_single_ptp_descent:
     target_z: 0.038
     z_tolerance: 0.001
     z_weight: 20000.0
-    target_z_min: 0.0240
+    target_z_min: 0.025
     target_z_max: 0.040
-    min_path_z: 0.0240
-    min_final_z: 0.0240
+    min_path_z: 0.025
+    min_final_z: 0.025
     minimum_descent: 0.030
     maximum_descent: 0.090
 
@@ -59,7 +59,7 @@ movej_single_ptp_descent:
     # Physical tests from the short 35.7mm approach were smoothest at 1 second.
     # The MoveJ controller may retime this upward to satisfy its dynamic limits.
     move_duration: 1.0
-    minimum_completion_time: 4.0
+    minimum_completion_time: 2.0
     joint_tolerance: 0.050
-    settle_time: 0.30
+    settle_time: 0.15
     timeout: 9.0

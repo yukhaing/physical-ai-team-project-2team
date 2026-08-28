@@ -5,23 +5,61 @@ yolo_detection:
     detections_topic: /console/detections
     selection_topic: /console/selected_box
     pixel_selection_topic: /console/select_pixel
-    model_path: /root/omx_box_project_ws/models/best.pt
+    model_path: /root/omx_box_project_ws/integration/omx_box_system/models/box_defect_best.pt
     confidence_threshold: 0.50
     device: cpu
     auto_select_defect: true
     auto_select_min_interval_sec: 8.0
+    angle_calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/active.yaml
+    angle_min_contour_area: 1000.0
+    joint5_offset_deg: 2.00255
+    joint5_sample_count: 4
+    joint5_period: 1.570796327
+    maximum_joint5_spread: 0.18
+    minimum_joint5: -0.80
+    maximum_joint5: 0.80
 
 beagle_adapter:
   ros__parameters:
-    simulation_arrival_seconds: 3.0
+    # auto: learn the remote IP from its status connection
+    # local: use 127.0.0.1, remote: use trigger_host (or auto-discover fallback)
+    connection_mode: auto
+    trigger_host: ""
+    trigger_port: 8765
+    status_bind_host: 0.0.0.0
+    status_port: 9000
+    connect_timeout: 2.0
+    retry_interval: 2.0
+    local_python: /root/omx_box_project_ws/integration/yeongjin_gui/Beagle_mobile_robot/.venv/bin/python
+    local_mission: "/root/omx_box_project_ws/integration/yeongjin_gui/Beagle_mobile_robot/missions/receiving_defect_shuttle copy.py"
+    local_output: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/beagle_shuttle.csv
+    local_process_log: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/beagle_reconnect.log
 
 sorting_orchestrator:
   ros__parameters:
-    bypass_beagle: true
+    bypass_beagle: false
+    require_beagle_ready: true
+    # One-button operation: after 가동, automatically run a detected defect cycle.
     auto_start_omx: true
     auto_continue_pick: true
-    auto_complete_unload: true
+    # Wait at the defect zone until the operator presses the GUI 하역 완료 button.
+    auto_complete_unload: false
+    continuous_operation: true
+    # Use the GUI detector because it carries pixel coordinates and joint5.
+    # The legacy /yolo/selected_box Float64 bridge lacks both and races it.
+    accept_external_yolo: false
+    # A failed grasp cancels the current job and reopens detection automatically.
+    auto_recover_failed_cycle: true
+    failure_ready_delay: 1.0
+    # Stop is accepted only between cycles, then returns to validated bringup HOME.
+    home_joint_names: [joint1, joint2, joint3, joint4, joint5]
+    home_positions: [0.0, -1.57, 1.57, 1.57, 0.0]
+    home_move_duration: 5.0
+    home_minimum_completion_time: 5.0
+    home_joint_tolerance: 0.08
+    home_settle_time: 0.20
+    home_timeout: 12.0
 
 operations_log:
   ros__parameters:
-    database_path: /root/omx_box_project_ws/logs/operations.sqlite3
+    database_path: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/operations.sqlite3

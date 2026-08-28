@@ -9,11 +9,11 @@ movej_staging:
     # ID 15 does not currently track position commands. All downstream plans
     # preserve the measured joint5 roll, so staging must not force it to zero.
     preserve_joint_names: [joint5]
-    move_duration: 4.0
+    move_duration: 3.0
     # Include controller settle, terminal trim, and application settle.
-    minimum_completion_time: 5.0
+    minimum_completion_time: 3.8
     # joint3 has a measured load-direction deadband of at least 0.014 rad.
     # Match the downstream staging gate while retaining Cartesian Z checks.
-    joint_tolerance: 0.070
-    settle_time: 0.15
+    joint_tolerance: 0.042
+    settle_time: 0.10
     timeout: 12.0

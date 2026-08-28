@@ -58,7 +58,6 @@ class GripperOpen(Node):
         self.create_subscription(JointState, self.p('joint_states_topic'), self.on_joints, 10)
         self.client = ActionClient(self, GripperCommand, self.p('gripper_action'))
         self.create_service(Trigger, '~/confirm', self.on_confirm)
-        self.create_service(Trigger, '~/cancel', self.on_cancel)
         self.create_timer(0.05, self.update_open_watchdog)
         self.report('ready; validate pitch pregrasp, latch a fresh target, then call ~/confirm')
 
@@ -132,18 +131,6 @@ class GripperOpen(Node):
         if not float(self.p('min_pregrasp_pitch')) <= pitch <= float(self.p('max_pregrasp_pitch')):
             return None, f'not at pregrasp pitch: {math.degrees(pitch):.2f}deg'
         return (pose, pitch, xy_error, float(self.positions[gripper])), ''
-
-    def on_cancel(self, _request, response):
-        was_active = self.active
-        self.active = False
-        self.watchdog_accept_cancel = False
-        self.watchdog_cancel_requested = False
-        if self.goal_handle is not None:
-            self.goal_handle.cancel_goal_async()
-        self.goal_handle = None
-        response.success, response.message = was_active, 'cancelled' if was_active else 'already idle'
-        self.report(response.message)
-        return response
 
     def on_confirm(self, _request, response):
         if self.active:
@@ -233,11 +220,19 @@ class GripperOpen(Node):
         except Exception as error:
             self.report(f'FAILED: gripper result error: {error}')
             return
+        measured = self.positions.get(self.p('gripper_joint_name'))
         accepted_watchdog_open = (
             wrapped.status == GoalStatus.STATUS_CANCELED and
             self.watchdog_accept_cancel)
-        measured = self.positions.get(self.p('gripper_joint_name'))
-        position = float(measured if accepted_watchdog_open else result.position)
+        accepted_stalled_open = (
+            wrapped.status == GoalStatus.STATUS_ABORTED and
+            bool(result.stalled) and measured is not None and
+            float(measured) >= float(self.p('minimum_open_position')) and
+            abs(float(measured) - float(self.p('open_position'))) <=
+            float(self.p('open_tolerance')))
+        position = float(
+            measured if accepted_watchdog_open or accepted_stalled_open
+            else result.position)
         self.goal_handle = None
         self.watchdog_started = None
         self.watchdog_stable_since = None
@@ -245,9 +240,10 @@ class GripperOpen(Node):
         self.watchdog_accept_cancel = False
         self.watchdog_cancel_requested = False
         if (wrapped.status != GoalStatus.STATUS_SUCCEEDED and
-                not accepted_watchdog_open):
+                not accepted_watchdog_open and not accepted_stalled_open):
             self.report(f'FAILED: gripper action status={wrapped.status}')
-        elif not accepted_watchdog_open and not result.reached_goal:
+        elif (not accepted_watchdog_open and not accepted_stalled_open and
+              not result.reached_goal):
             self.report(
                 f'FAILED: open goal not reached; position={position:.4f}rad, '
                 f'effort={result.effort:.2f}, stalled={result.stalled}')
@@ -258,6 +254,8 @@ class GripperOpen(Node):
         else:
             if accepted_watchdog_open:
                 self.report(f'accepted watchdog open at {position:.4f}rad')
+            if accepted_stalled_open:
+                self.report(f'accepted stalled open at {position:.4f}rad')
             self.report(f'COMPLETED: gripper fully open at {position:.4f}rad')
 
 

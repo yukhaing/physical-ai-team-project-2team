@@ -1,6 +1,8 @@
 camera_homography_7point_calibration:
   ros__parameters:
     image_topic: /camera1/image_raw
+    # Measure these seven physical points from link0 and edit them before use.
+    # The camera window must be clicked in this exact order.
     reference_points_link0:
       [0.00, -0.33,
        0.00,  0.12,
@@ -9,5 +11,5 @@ camera_homography_7point_calibration:
        0.11, -0.17,
        0.20, -0.025,
        0.10,  0.075]
-    output_file: /root/omx_box_project_ws/runtime/calibration/active.yaml
+    output_file: /root/omx_box_project_ws/integration/omx_box_system/calibration/omx_camera_homography_7point.yaml
     warning_mean_error_mm: 8.0

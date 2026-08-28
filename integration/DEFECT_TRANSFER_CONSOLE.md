@@ -1,19 +1,18 @@
 # OMX 불량 박스 이송 통합 관제
 
 이 문서는 YOLO가 검출한 `defect` 박스만 OMX와 Beagle 시나리오로 이송하는
-통합 관제의 현재 구현 상태와 GUI 동작 테스트 절차를 설명한다. 현재 Beagle은
-실제 장치 연동이 아니라 더미 상태 전이 기반이며, 캘리브레이션 값도 실환경
-최종값 반영 전 상태일 수 있다.
+통합 관제의 현재 구현 상태와 GUI 동작 테스트 절차를 설명한다. Beagle은 TCP
+어댑터를 통해 같은 PC 또는 별도 제어 PC에서 실행할 수 있다.
 
 ## 동작 흐름
 
 1. YOLO가 `defect` 박스를 검출한다. `normal` 박스는 선택과 이송 대상에서 제외된다.
-2. 관제 화면에서 불량 박스를 선택하면 Beagle 이송 단계가 시작된 것으로 간주한다.
-3. 현재 구현에서는 `beagle_adapter_node.py`가 더미 도착 상태를 발행하거나 설정에 따라 해당 단계를 우회한다.
-4. Beagle 도착 상태를 확인한 뒤 OMX 집기/적재를 진행한다.
-5. OMX 적재가 끝나면 시스템은 작업자 하역 완료 신호를 기다린다.
-6. 작업자가 박스를 내린 뒤 `작업자 하역 완료: 원위치 복귀`를 누르면 Beagle 복귀 단계로 전환한다.
-7. 더미 Beagle 복귀 완료 후 다음 불량 박스를 처리할 수 있다.
+2. Beagle이 수령 위치에서 `WAIT_SIGNAL` 상태를 보내면 관제가 준비 상태가 된다.
+3. 불량 박스를 선택하면 OMX가 집어서 수령 위치의 Beagle 위에 놓는다.
+4. 적재 완료 후 관제가 Beagle에 `box_placed` 신호를 보낸다.
+5. Beagle은 불량 구역으로 이동한 뒤 정지하고 작업자 하역 완료 신호를 기다린다.
+6. 작업자가 박스를 내리고 GUI의 `하역 완료` 버튼을 누르면 Beagle이 수령 위치로 복귀한다.
+7. 복귀 상태를 확인한 후 다음 불량 박스 사이클을 허용한다.
 
 ## Ubuntu 사전 준비
 
@@ -62,6 +61,27 @@ source install/setup.bash
 cd physical-ai-team-project-2team/omx/docker
 ./container.sh gui-up
 ```
+
+Beagle 제어 프로그램을 같은 PC에서 실행할 때:
+
+```bash
+BEAGLE_MODE=local ./container.sh gui-up
+cd ../integration/yeongjin_gui/Beagle_mobile_robot
+python3 "missions/receiving_defect_shuttle copy.py" \
+  --trigger-port 8765 --status-host 127.0.0.1 --status-port 9000
+```
+
+Beagle을 별도 PC에서 실행할 때는 GUI를 다음처럼 시작한다. `auto`는 상태 연결의
+상대 IP를 자동으로 사용하고, 고정 IP가 필요하면 `remote`를 사용한다.
+
+```bash
+BEAGLE_MODE=auto ./container.sh gui-up
+# 또는
+BEAGLE_MODE=remote BEAGLE_TRIGGER_HOST=<BEAGLE_PC_IP> ./container.sh gui-up
+```
+
+배포 방식은 `BEAGLE_MODE`만 바꾸며, 나중에 한 방식을 제거해도 OMX 및 GUI의
+사이클 로직은 수정할 필요가 없다. 통신 구현은 `beagle_adapter_node.py`에만 있다.
 
 이 명령은 다음 항목을 자동으로 실행한다.
 
@@ -134,22 +154,23 @@ ros2 launch omx_box_control integrated_console.launch.py
 
 ## 관제 화면 조작
 
-1. `가동`을 눌러 시스템을 활성화한다.
-2. 카메라 화면에서 검출된 불량 박스 가까이를 클릭한다. 정상 박스만 있으면 선택할 수 없다.
-3. 상태가 `BEAGLE_ARRIVED`가 되면 `OMX 집기 시작`을 누른다. 자동 진행 설정이 켜져 있으면 이 단계가 자동으로 넘어갈 수 있다.
-4. 상태가 `TARGET_READY`가 되면 `집기/배치 계속`으로 OMX의 검증된 집기·적재 절차를 진행한다. 자동 진행 설정이 켜져 있으면 이 단계도 자동으로 진행될 수 있다.
-5. `OMX_COMPLETE` 상태에서는 작업자가 불량 박스를 하역한다.
-6. 하역이 끝난 뒤 `작업자 하역 완료: 원위치 복귀`를 한 번 누른다. 자동 완료 설정이 켜져 있으면 이 단계 역시 자동 처리될 수 있다.
-7. `BEAGLE_HOME` 상태가 표시되면 다음 불량 박스를 선택한다.
+1. Beagle 미션을 실행하고 GUI에 `READY`가 표시되는지 확인한다.
+2. `가동`을 눌러 시스템을 활성화한다.
+3. YOLO가 불량 박스를 검출하면 OMX 집기·배치가 자동 진행된다.
+4. OMX가 Beagle 위에 놓기를 완료하면 `box_placed`가 자동 전송된다.
+5. Beagle이 불량 구역에 도착하면 `하역 완료` 버튼이 활성화된다.
+6. 박스를 내린 뒤 `하역 완료`를 누르면 Beagle이 수령 위치로 복귀한다. 기존 5초 자동 대기는 사용하지 않는다.
+7. Beagle이 수령 위치로 돌아와 `READY`가 표시되면 다음 박스를 처리한다.
 
 `정지`는 현재 소프트웨어 명령을 취소하고 정지 요청을 보낸다. `비상정지`도 소프트웨어 수준의 요청이므로, 위험 상황에서는 반드시 OMX 장비의 물리 E-stop을 함께 사용한다. 비상정지 뒤에는 하드웨어를 점검하고 `리셋` 후 다시 `가동`한다.
 
 ## 현재 한계와 후속 작업
 
-- Beagle 실제 통신은 아직 구현되지 않았고, 현재는 더미 상태 값으로 GUI 동작을 검증한다.
+- Beagle 원격 정지는 팀원 미션 프로토콜에 아직 정의되지 않았다. 긴급 상황에서는
+  각 장비의 물리 정지를 사용해야 한다.
 - 현재 캘리브레이션 값은 실제 환경 기준 최종 보정값이 아닐 수 있다.
 - 최종 보정값은 추후 팀원에게 받아 반영하고, 좌표 변환 및 집기 정확도를 다시 확인해야 한다.
-- 실운영 전에는 테스트용 자동 진행/우회 설정을 운영용 기본값과 분리해야 한다.
+- Beagle 없이 OMX만 운용할 때는 `bypass_beagle: true`로 전환할 수 있다.
 
 ## 문제 해결
 
@@ -157,6 +178,7 @@ ros2 launch omx_box_control integrated_console.launch.py
 - 한글이 네모로 표시되면 이미지를 다시 빌드한다. 컨테이너에서 `fc-match "Noto Sans CJK KR"`로 폰트를 확인할 수 있다.
 - YOLO가 시작되지 않으면 컨테이너에서 `/root/omx_box_project_ws/models/best.pt` 존재 여부와 카메라 토픽 `/camera1/image_raw`를 확인한다.
 - `gui-up` 뒤 카메라가 보이지 않으면 `./container.sh gui-status`와 `/root/omx_box_project_ws/logs/gui_stack/integrated_console.log`를 먼저 확인한다.
-- Beagle 실제 통신 방식이 확정되기 전에는 `beagle_adapter_node.py`가 도착/복귀를 시간 기반으로 시뮬레이션한다. 실제 Beagle API 연동 시 이 어댑터만 교체한다.
+- `WAIT_BEAGLE`이 계속되면 Beagle 미션의 `--status-host`, TCP 9000 방화벽,
+  GUI의 `BEAGLE_MODE`를 확인한다.
 - 상태가 예상보다 빨리 넘어가면 `config/console.yaml`의 `bypass_beagle`, `auto_start_omx`, `auto_continue_pick`, `auto_complete_unload` 값을 먼저 확인한다.
 - 좌표가 실제 작업 위치와 다르면 최신 캘리브레이션 값이 반영되었는지 확인한다. 현재 값은 임시값일 수 있으며, 팀원에게 받은 최종 보정값으로 교체해야 한다.

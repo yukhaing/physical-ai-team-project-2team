@@ -37,8 +37,8 @@ movej_place_recovery:
     pitch_weight: 20.0
     max_xy_error: 0.010
     target_max_age: 300.0
-    # Match the measured place teaching point at X=23.47mm.
-    min_x: 0.015
+    # Match the expanded place-only X bound used by the normal transfer.
+    min_x: -0.070
     max_x: 0.32
     max_abs_y: 0.25
     fk_position_bias: [0.00126, 0.0, 0.00055]

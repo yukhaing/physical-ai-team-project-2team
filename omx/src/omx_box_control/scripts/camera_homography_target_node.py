@@ -2,6 +2,7 @@
 """Select planar OMX targets from a monocular camera using a homography."""
 
 import json
+import math
 import os
 import shutil
 import cv2
@@ -52,6 +53,8 @@ class CameraHomographyTarget(Node):
         self.latest_image = None
         self.image_points = []
         self.homography = None
+        self.calibration_pixels = None
+        self.calibration_residuals = None
         self.mode = 'target'
         self.window_name = 'OMX Homography Target'
         self.pose_pub = self.create_publisher(
@@ -108,7 +111,10 @@ class CameraHomographyTarget(Node):
         """Accept a GUI pixel click while retaining the existing homography path."""
         try:
             selection = json.loads(message.data)
-            self.publish_target(int(selection['x']), int(selection['y']))
+            joint5 = float(selection['joint5_rad'])
+            if not math.isfinite(joint5) or not (-0.80 <= joint5 <= 0.80):
+                raise ValueError(f'invalid joint5 angle: {joint5}')
+            self.publish_target(int(selection['x']), int(selection['y']), joint5)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             self.get_logger().warning(f'Ignored invalid GUI pixel selection: {error}')
 
@@ -118,17 +124,33 @@ class CameraHomographyTarget(Node):
         if matrix is None or not np.all(np.isfinite(matrix)):
             self.get_logger().error('Homography calculation failed; reset and retry')
             return
+        projected = cv2.perspectiveTransform(
+            image.reshape((-1, 1, 2)), matrix).reshape((-1, 2))
         self.homography = matrix
+        self.calibration_pixels = image.copy()
+        self.calibration_residuals = self.reference_points - projected
         self.mode = 'target'
         self.save_calibration()
-        projected = cv2.perspectiveTransform(image.reshape((-1, 1, 2)), matrix).reshape((-1, 2))
         error = np.linalg.norm(projected - self.reference_points, axis=1)
         self.get_logger().info(
             f'Calibration complete; mean reference error={np.mean(error) * 1000.0:.1f} mm')
 
-    def publish_target(self, pixel_x, pixel_y):
-        pixel = np.asarray([[[float(pixel_x), float(pixel_y)]]], dtype=np.float64)
-        x, y = cv2.perspectiveTransform(pixel, self.homography)[0, 0]
+    def world(self, pixel_x, pixel_y):
+        pixel = np.asarray([float(pixel_x), float(pixel_y)], dtype=np.float64)
+        transformed = self.homography @ np.array([pixel[0], pixel[1], 1.0])
+        point = transformed[:2] / transformed[2]
+        if self.calibration_pixels is None or self.calibration_residuals is None:
+            return point
+        distance = np.linalg.norm(self.calibration_pixels - pixel, axis=1)
+        nearest = int(np.argmin(distance))
+        if distance[nearest] < 1.0:
+            return point + self.calibration_residuals[nearest]
+        weights = 1.0 / (distance * distance + 1e-6)
+        return point + (
+            weights[:, None] * self.calibration_residuals).sum(axis=0) / weights.sum()
+
+    def publish_target(self, pixel_x, pixel_y, joint5=None):
+        x, y = self.world(pixel_x, pixel_y)
         if not np.isfinite(x) or not np.isfinite(y):
             self.get_logger().error('Selected pixel produced an invalid target')
             return
@@ -136,10 +158,16 @@ class CameraHomographyTarget(Node):
         pose.header.stamp = self.get_clock().now().to_msg()
         pose.header.frame_id = self.base_frame
         pose.pose.position.x, pose.pose.position.y = float(x), float(y)
-        pose.pose.position.z, pose.pose.orientation.w = self.target_z, 1.0
+        pose.pose.position.z = self.target_z
+        if joint5 is None:
+            pose.pose.orientation.w = 1.0
+        else:
+            pose.pose.orientation.x = math.sin(joint5 / 2.0)
+            pose.pose.orientation.w = math.cos(joint5 / 2.0)
         self.pose_pub.publish(pose)
         self.robot_target_pub.publish(String(data=json.dumps({
             'pixel_x': pixel_x, 'pixel_y': pixel_y, 'robot_x': float(x), 'robot_y': float(y),
+            'joint5_rad': joint5,
         })))
         marker = Marker()
         marker.header, marker.pose = pose.header, pose.pose
@@ -151,7 +179,8 @@ class CameraHomographyTarget(Node):
         self.marker_pub.publish(marker)
         self.get_logger().info(
             f'pixel=({pixel_x}, {pixel_y}) -> {self.base_frame}: '
-            f'x={x:.3f}, y={y:.3f}, z={self.target_z:.3f}, zone={zone} '
+            f'x={x:.3f}, y={y:.3f}, z={self.target_z:.3f}, zone={zone}, '
+            f'joint5={joint5 if joint5 is not None else "unavailable"} '
             '(preview only)')
 
     def workspace_zone(self, x, y):
@@ -279,11 +308,19 @@ class CameraHomographyTarget(Node):
         storage = cv2.FileStorage(self.calibration_file, cv2.FILE_STORAGE_READ)
         matrix = storage.getNode('homography').mat() if storage.isOpened() else None
         image = storage.getNode('image_points').mat() if storage.isOpened() else None
+        reference = storage.getNode('reference_points_link0').mat() if storage.isOpened() else None
         storage.release()
         if matrix is not None and matrix.shape == (3, 3) and np.all(np.isfinite(matrix)):
             self.homography = matrix
             if image is not None:
-                self.image_points = [tuple(point) for point in image.reshape((-1, 2))]
+                pixels = image.reshape((-1, 2)).astype(float)
+                self.image_points = [tuple(point) for point in pixels]
+                if reference is not None:
+                    references = reference.reshape((-1, 2)).astype(float)
+                    projected = cv2.perspectiveTransform(
+                        pixels.reshape((-1, 1, 2)), matrix).reshape((-1, 2))
+                    self.calibration_pixels = pixels
+                    self.calibration_residuals = references - projected
             self.get_logger().info(f'Loaded calibration from {self.calibration_file}')
 
     def destroy_node(self):

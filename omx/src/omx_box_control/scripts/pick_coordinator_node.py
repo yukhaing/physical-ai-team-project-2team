@@ -38,6 +38,7 @@ class PickCoordinator(Node):
     WAIT_PLACE_CORRECTION = 'WAIT_PLACE_LIFT_CORRECTION'
     WAIT_PLACE_DESCENT = 'WAIT_PLACE_DESCENT'
     WAIT_PLACE_OPEN = 'WAIT_PLACE_GRIPPER_OPEN'
+    WAIT_PLACE_RETRACT = 'WAIT_PLACE_RETRACT'
     WAIT_RETURN_STAGING = 'WAIT_RETURN_STAGING'
     WAIT_FINAL_CLOSE = 'WAIT_FINAL_GRIPPER_CLOSE'
     COMPLETE = 'COMPLETE'
@@ -47,6 +48,8 @@ class PickCoordinator(Node):
         super().__init__('pick_coordinator')
         defaults = {
             'movej_topic': '/omx_movej_controller/movej',
+            # A non-empty default makes rclpy declare this as STRING_ARRAY.
+            'allowed_movej_publisher_nodes': [''],
             'staging_command_topic': '/pick_coordinator/commands/staging',
             'xy_command_topic': '/pick_coordinator/commands/xy',
             'pitch_command_topic': '/pick_coordinator/commands/pitch',
@@ -74,7 +77,7 @@ class PickCoordinator(Node):
             'open_watchdog_stable_time': 0.50,
             'open_watchdog_position_epsilon': 0.003,
             'maximum_staging_closed_position': 0.05,
-            'min_grasp_position': 0.005,
+            'min_grasp_position': 0.15,
             'max_grasp_position': 0.60,
             'grasp_watchdog_timeout': 3.0,
             'grasp_watchdog_stable_time': 0.50,
@@ -166,7 +169,8 @@ class PickCoordinator(Node):
             'pitch': (self.WAIT_PITCH,),
             'pick_descent': (self.WAIT_PICK_DESCENT,),
             'lift': (self.WAIT_LIFT,),
-            'place_xy_transfer': (self.WAIT_PLACE_XY_TRANSFER,),
+            'place_xy_transfer': (
+                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT),
             'place_recovery': (self.WAIT_PLACE_RECOVERY,),
             'place_rotate': (self.WAIT_PLACE_ROTATE,),
             'place_correction': (self.WAIT_PLACE_CORRECTION,),
@@ -216,8 +220,11 @@ class PickCoordinator(Node):
         self.target_received_time = self.get_clock().now()
         if self.state == self.WAIT_PICK_TARGET:
             point = message.pose.position
+            orientation = message.pose.orientation
+            joint5 = 2.0 * math.atan2(orientation.x, orientation.w)
             self.report(
-                f'pick target received x={point.x:.4f}, y={point.y:.4f}; '
+                f'pick target received x={point.x:.4f}, y={point.y:.4f}, '
+                f'joint5={math.degrees(joint5):.2f}deg; '
                 'call ~/continue to begin uninterrupted pick')
 
     def on_stage_command(self, key, allowed_states, message):
@@ -232,8 +239,11 @@ class PickCoordinator(Node):
 
     def preflight_error(self):
         publishers = self.get_publishers_info_by_topic(self.p('movej_topic'))
-        allowed_publishers = {self.get_name(), 'sorting_orchestrator'}
-        foreign = [p.node_name for p in publishers if p.node_name not in allowed_publishers]
+        allowed = {name for name in self.p('allowed_movej_publisher_nodes') if name}
+        foreign = [
+            p.node_name for p in publishers
+            if p.node_name != self.get_name() and p.node_name not in allowed
+        ]
         if foreign:
             return f'MoveJ command publisher already active: {foreign}'
         if self.joint_feedback_time is None:
@@ -382,7 +392,8 @@ class PickCoordinator(Node):
             'pick_open': (self.WAIT_PICK_OPEN,),
             'pick_descent': (self.WAIT_PICK_DESCENT,),
             'lift': (self.WAIT_LIFT,),
-            'place_xy_transfer': (self.WAIT_PLACE_XY_TRANSFER,),
+            'place_xy_transfer': (
+                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT),
             'place_recovery': (self.WAIT_PLACE_RECOVERY,),
             'place_rotate': (self.WAIT_PLACE_ROTATE,),
             'place_correction': (self.WAIT_PLACE_CORRECTION,),
@@ -427,6 +438,13 @@ class PickCoordinator(Node):
             self.command_gripper(False, self.WAIT_PICK_CLOSE, 'pick gripper close')
             return
         if key == 'place_xy_transfer':
+            if self.state == self.WAIT_PLACE_RETRACT:
+                ok, result = self.request(
+                    'staging', self.WAIT_RETURN_STAGING,
+                    'return staging after place retract')
+                if not ok:
+                    self.fail(result)
+                return
             self.publish_place_release_target()
             ok, result = self.request(
                 'place_descent', self.WAIT_PLACE_DESCENT,
@@ -599,6 +617,21 @@ class PickCoordinator(Node):
             opening and next_state == self.WAIT_PLACE_OPEN and
             wrapped.status == GoalStatus.STATUS_CANCELED and
             self.open_watchdog_accept_cancel)
+        measured = self.positions.get(self.p('gripper_joint_name'))
+        accepted_stalled_empty_close = (
+            not opening and next_state in (
+                self.WAIT_STAGING_CLOSE, self.WAIT_FINAL_CLOSE) and
+            wrapped.status == GoalStatus.STATUS_ABORTED and
+            bool(result.stalled) and measured is not None and
+            float(measured) <=
+            float(self.p('maximum_staging_closed_position')))
+        accepted_stalled_open = (
+            opening and next_state == self.WAIT_PLACE_OPEN and
+            wrapped.status == GoalStatus.STATUS_ABORTED and
+            bool(result.stalled) and measured is not None and
+            float(measured) >= float(self.p('minimum_open_position')) and
+            abs(float(measured) - float(self.p('gripper_open_position'))) <=
+            float(self.p('open_tolerance')))
         self.gripper_goal_handle = None
         self.grasp_watchdog_started = None
         self.grasp_watchdog_stable_since = None
@@ -613,7 +646,8 @@ class PickCoordinator(Node):
         if (wrapped.status != GoalStatus.STATUS_SUCCEEDED and
                 not accepted_grasp_stall and not accepted_watchdog_grasp and
                 not accepted_watchdog_empty_close and
-                not accepted_watchdog_open):
+                not accepted_stalled_empty_close and
+                not accepted_watchdog_open and not accepted_stalled_open):
             self.fail(f'{description} action status={wrapped.status}')
             return
         position = self.positions.get(self.p('gripper_joint_name'))
@@ -626,9 +660,13 @@ class PickCoordinator(Node):
                 return
             if accepted_watchdog_open:
                 self.report(f'accepted watchdog open at {position:.4f}rad')
+            if accepted_stalled_open:
+                self.report(f'accepted stalled open at {position:.4f}rad')
             if next_state == self.WAIT_PLACE_OPEN:
+                self.publish_place_target()
                 ok, result = self.request(
-                    'staging', self.WAIT_RETURN_STAGING, 'return staging')
+                    'place_xy_transfer', self.WAIT_PLACE_RETRACT,
+                    'place retract to high approach')
                 if not ok:
                     self.fail(result)
             return
@@ -637,9 +675,13 @@ class PickCoordinator(Node):
                 self.report(f'accepted grasp contact stall at {position:.4f}rad')
             if accepted_watchdog_grasp:
                 self.report(f'accepted watchdog grasp contact at {position:.4f}rad')
-            if not (float(self.p('min_grasp_position')) <= position <=
-                    float(self.p('max_grasp_position'))):
-                self.fail(f'grasp position outside range ({position:.4f}rad)')
+            if position < float(self.p('min_grasp_position')):
+                self.fail(
+                    f'pick failed: empty grasp ({position:.4f}rad < '
+                    f'{float(self.p("min_grasp_position")):.4f}rad)')
+                return
+            if position > float(self.p('max_grasp_position')):
+                self.fail(f'grasp position above range ({position:.4f}rad)')
                 return
             if bool(self.p('require_grasp_confirmation')):
                 self.enter(self.WAIT_GRASP_CONFIRM,
@@ -652,6 +694,8 @@ class PickCoordinator(Node):
         if next_state == self.WAIT_STAGING_CLOSE:
             if accepted_watchdog_empty_close:
                 self.report(f'accepted watchdog staging close at {position:.4f}rad')
+            if accepted_stalled_empty_close:
+                self.report(f'accepted stalled staging close at {position:.4f}rad')
             if position > float(self.p('maximum_staging_closed_position')):
                 self.fail(f'staging gripper did not close ({position:.4f}rad)')
                 return
@@ -662,6 +706,8 @@ class PickCoordinator(Node):
         if next_state == self.WAIT_FINAL_CLOSE:
             if accepted_watchdog_empty_close:
                 self.report(f'accepted watchdog final close at {position:.4f}rad')
+            if accepted_stalled_empty_close:
+                self.report(f'accepted stalled final close at {position:.4f}rad')
             self.enter(self.COMPLETE, f'cycle complete; final gripper={position:.4f}rad')
 
     def actual_tcp_z(self):

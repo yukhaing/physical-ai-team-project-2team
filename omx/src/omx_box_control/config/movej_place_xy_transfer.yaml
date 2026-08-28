@@ -31,11 +31,12 @@ movej_place_xy_transfer:
     max_pitch: 3.14159
     preferred_pitch: 0.0
     pitch_weight: 0.0
-    max_xy_error: 0.010
+    # The revised place point settled with about 9.2mm of XY residual.
+    max_xy_error: 0.012
     target_max_age: 300.0
-    # Taught place point uses X=23.47mm with a large negative Y radius.
-    # Keep this relaxed bound place-only; camera pick bounds remain unchanged.
-    min_x: 0.015
+    # Place-only bound includes about 20mm of additional X adjustment margin
+    # from the revised -46.53mm target; camera pick bounds remain unchanged.
+    min_x: -0.070
     max_x: 0.32
     max_abs_y: 0.25
     fk_position_bias: [0.00126, 0.0, 0.00055]
@@ -43,8 +44,9 @@ movej_place_xy_transfer:
     joint_delta_weight: 0.02
     candidate_xy_slack: 0.0005
     height_reward: 0.0
-    move_duration: 4.5
-    minimum_completion_time: 5.5
-    joint_tolerance: 0.050
-    settle_time: 0.15
-    timeout: 13.0
+    # Used for both loaded place approach and empty retract.
+    move_duration: 3.5
+    minimum_completion_time: 4.1
+    joint_tolerance: 0.060
+    settle_time: 0.10
+    timeout: 16.0
