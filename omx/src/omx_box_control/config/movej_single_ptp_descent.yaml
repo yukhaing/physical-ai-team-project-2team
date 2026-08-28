@@ -1,0 +1,65 @@
+movej_single_ptp_descent:
+  ros__parameters:
+    # Coordinator pick descent: one validated joint-space PTP command.
+    # The former adaptive descent remains available as a standalone fallback.
+    target_topic: /camera_box_target
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    base_frame: link0
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+
+    # Start only from the existing camera-aligned pitch-pregrasp pose.
+    require_staging: false
+    require_start_at_target: true
+    start_xy_tolerance: 0.010
+    # The measured pregrasp is about 73.7mm; the independent minimum-descent
+    # and path-Z gates below still prevent a second descent from a low pose.
+    start_min_z: 0.070
+    require_start_pitch: true
+    start_min_pitch: 1.221730476
+    start_max_pitch: 1.483529864
+
+    # First physical validation targets the safe upper edge, not the 32mm center.
+    use_target_z: true
+    target_z: 0.038
+    z_tolerance: 0.001
+    z_weight: 20000.0
+    target_z_min: 0.025
+    target_z_max: 0.040
+    min_path_z: 0.025
+    min_final_z: 0.025
+    minimum_descent: 0.030
+    maximum_descent: 0.090
+
+    min_pitch: 1.396263402
+    max_pitch: 1.605702912
+    preferred_pitch: 1.500983157
+    pitch_weight: 2.0
+    xy_weight: 20000.0
+    joint_delta_weight: 1.0
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    path_samples: 101
+    max_xy_error: 0.007
+    max_path_xy_deviation: 0.030
+    target_max_age: 30.0
+    min_x: 0.08
+    max_x: 0.32
+    max_abs_y: 0.25
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+
+    gripper_joint_name: gripper_joint_1
+    minimum_open_position: 0.80
+
+    # Physical tests from the short 35.7mm approach were smoothest at 1 second.
+    # The MoveJ controller may retime this upward to satisfy its dynamic limits.
+    move_duration: 1.0
+    minimum_completion_time: 2.0
+    joint_tolerance: 0.050
+    settle_time: 0.15
+    timeout: 9.0

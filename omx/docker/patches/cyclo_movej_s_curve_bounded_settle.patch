@@ -1,0 +1,80 @@
+diff --git a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
+--- a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
++++ b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
+@@ -73,5 +73,7 @@ private:
+   double smooth_max_acceleration_;
+   double smooth_max_jerk_;
+   double smooth_min_duration_;
++  double smooth_settle_tolerance_;
++  double smooth_settle_timeout_;
+
+   std::string urdf_path_;
+@@ -110,7 +112,9 @@ private:
+   bool movej_target_initialized_;
+   bool movej_trajectory_active_;
+   bool joint_state_timeout_active_ = false;
++  bool smooth_settling_ = false;
+
+   rclcpp::Time motion_start_time_;
+   rclcpp::Time last_joint_state_time_;
++  rclcpp::Time smooth_settle_start_time_;
+   double active_motion_duration_;
+diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+--- a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
++++ b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+@@ -51,5 +51,7 @@ OmxMoveJControllerNode::OmxMoveJControllerNode()
+   smooth_max_acceleration_ = this->declare_parameter("smooth_max_acceleration", 0.30);
+   smooth_max_jerk_ = this->declare_parameter("smooth_max_jerk", 1.0);
+   smooth_min_duration_ = this->declare_parameter("smooth_min_duration", 1.0);
++  smooth_settle_tolerance_ = this->declare_parameter("smooth_settle_tolerance", 0.04);
++  smooth_settle_timeout_ = this->declare_parameter("smooth_settle_timeout", 3.0);
+
+   urdf_path_ = this->declare_parameter("urdf_path", std::string(""));
+@@ -348,4 +350,5 @@ void OmxMoveJControllerNode::moveJCallback(
+     active_motion_duration_ = std::max(
+       {smooth_min_duration_, duration, velocity_time, acceleration_time, jerk_time});
+     motion_start_time_ = this->now();
++    smooth_settling_ = false;
+     movej_trajectory_active_ = max_delta > 1.0e-6;
+@@ -411,10 +414,30 @@ void OmxMoveJControllerNode::controlLoopCallback()
+       if (s >= 1.0) {
+         movej_trajectory_active_ = false;
+         q_ref = movej_goal_;
+         qdot_ref.setZero();
+-        smooth_profile_completed = true;
+-        RCLCPP_INFO(this->get_logger(), "MoveJ S-curve profile completed.");
++        smooth_settling_ = true;
++        smooth_settle_start_time_ = this->now();
++        RCLCPP_INFO(this->get_logger(), "MoveJ S-curve profile completed; settling on feedback.");
+       }
+     }
++    if (smooth_profile_enabled_ && smooth_settling_) {
++      q_ref = movej_goal_;
++      qdot_ref.setZero();
++      const double actual_error = (movej_goal_ - q_).cwiseAbs().maxCoeff();
++      const double settle_elapsed = (this->now() - smooth_settle_start_time_).seconds();
++      if (actual_error <= smooth_settle_tolerance_) {
++        smooth_settling_ = false;
++        smooth_profile_completed = true;
++        RCLCPP_INFO(
++          this->get_logger(), "MoveJ settled: actual max error=%.4f rad", actual_error);
++      } else if (settle_elapsed >= smooth_settle_timeout_) {
++        smooth_settling_ = false;
++        smooth_profile_completed = true;
++        RCLCPP_WARN(
++          this->get_logger(),
++          "MoveJ settle timeout: actual max error=%.4f rad; holding feedback",
++          actual_error);
++      }
++    }
+
+     const Eigen::VectorXd desired_joint_vel =
+diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+--- a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
++++ b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+@@ -467,4 +490,5 @@ void OmxMoveJControllerNode::syncCommandStateToFeedback()
+   movej_start_ = q_;
+   movej_goal_ = q_;
+   movej_trajectory_active_ = false;
++  smooth_settling_ = false;
+ }
