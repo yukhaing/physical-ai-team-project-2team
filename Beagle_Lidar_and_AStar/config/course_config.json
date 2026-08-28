@@ -1,0 +1,11 @@
+{
+  "_note": "All x_m/y_m are measured from the room's bottom-left wall corner (0,0), matching rectangle_segments(0, 0, boundary.x_m, boundary.y_m). OMX reference point intentionally omitted for now -- Step 1 only checks go-to-zone position/heading, no OMX-relative disambiguation yet.",
+  "boundary": {
+    "x_m": 0.86,
+    "y_m": 0.70
+  },
+  "zones": {
+    "receiving": {"x_m": 0.35, "y_m": 0.34},
+    "defect": {"x_m": 0.73, "y_m": 0.135}
+  }
+}

@@ -353,31 +353,8 @@ class BeagleSimulator:
                 # usually still routes past the same obstacle from the old approach
                 # angle and re-blocks almost immediately.
                 self.set_goal(*self.goal)
-        elif self.goal and not self.auto_path:
-            # Confirmed 2026-08-28: "No path found" left the robot frozen (cmd=(0,0),
-            # status=NO_PATH) forever -- nothing ever retried set_goal() again, even though
-            # the usual cause (est_pose sitting right at/outside the room boundary, so its
-            # start cell has no valid plan) is exactly what the existing back-up+turn recovery
-            # is meant to escape. Reuse it here instead of a bare retry, which would likely
-            # fail again immediately from the same stuck position.
-            self._replan_cooldown = max(0.0, self._replan_cooldown - dt)
-            if self._replan_cooldown <= 0:
-                print('No path found -> backing away before retrying')
-                self._recover_back_sign = -1.0
-                bearing_to_goal = math.atan2(self.goal[1] - self.est_pose.y, self.goal[0] - self.est_pose.x)
-                heading_diff = wrap_angle(bearing_to_goal - self.est_pose.theta)
-                self._recover_turn_dir = 1.0 if heading_diff > 0 else -1.0
-                self._recover_time_left = self._RECOVER_BACK_S + self._RECOVER_TURN_S
-                self._replan_cooldown = 1.5
-            self.status = 'NO_PATH'
         elif self.auto_on and self.auto_path:
-            # Confirmed 2026-08-28: this was also a frame count (like the recovery timer
-            # above), decremented by 1 regardless of dt. At the real ~0.3-0.4s/frame rate,
-            # the "40 frame" cooldown was actually blocking ALL blocked-detection (front/side/
-            # rear/stall) for 12-16 real seconds after any single replan/recover event -- seen
-            # rear stuck at ~70mm for many consecutive prints with zero "Stuck (...)" messages,
-            # because the cooldown gate below never reopened in time.
-            self._replan_cooldown = max(0.0, self._replan_cooldown - dt)
+            self._replan_cooldown = max(0, self._replan_cooldown - 1)
             # zone들이 원래 벽에 붙어 있으므로, 목적지에 이미 가까운 상태에서 벽이 가까운
             # 건 진짜 막힘이 아니라 정상적인 도착 과정임 -- 이 구간에서는 replan/recover를
             # 걸지 않고 pure pursuit이 그대로 도착까지 끝내게 둡니다 (아래 60mm 비상정지는
@@ -445,7 +422,7 @@ class BeagleSimulator:
                 else:
                     print('Front blocked -> replanning path')
                     self.set_goal(*self.goal)
-                self._replan_cooldown = 1.5  # seconds, not frames -- see the fix note above
+                self._replan_cooldown = 40
             # lookahead_m=0.30 / speed_mps=0.11 were sized for the old 2.4x2.4m room -- 0.11 m/s
             # alone is ~34% wheel command (wheel_percent_to_mps(100%)=0.324 m/s), already over the
             # 25% safety ceiling before the clamp below even applies, and a 30cm lookahead is a
@@ -456,29 +433,20 @@ class BeagleSimulator:
             # showed up as a visible S-curve wobble around the pursuit target instead of a
             # smooth line -- a longer lookahead trades a little corner-cutting for a steadier
             # correction.
-            # speed_mps 0.08 (2026-08-27) turned out too high: wheel_percent_to_mps(100%)=
-            # 0.324 m/s means v=0.08 alone needs ~24.7% wheel command, which by itself already
-            # sits at/above the 20% clamp -- leaving ZERO headroom for omega's steering
-            # differential. Confirmed in logs: wheel=(20,20) for many consecutive steps despite
-            # meaningfully nonzero omega, i.e. steering was being silently clipped away, which
-            # is why it couldn't turn onto the defect-zone bearing. Rebalanced 2026-08-28:
-            # speed_mps=0.06 (~18.5% baseline) + ceiling 24 (just under SafeBeagle's max_speed=
-            # 25) leaves ~5.5% for the differential -- still faster than the original 0.05, but
-            # actually leaves steering room this time.
+            # speed_mps raised 0.05->0.08 and the wheel-percent ceiling 15->20 on 2026-08-27
+            # (driving felt too slow) -- still comfortably under SafeBeagle's max_speed=25 hard
+            # ceiling set below.
             v, omega, target_index = pure_pursuit_command(
-                self.est_pose, self.auto_path, lookahead_m=0.10, speed_mps=0.05)
+                self.est_pose, self.auto_path, lookahead_m=0.16, speed_mps=0.08)
             if 0 <= target_index < len(self.auto_path):
                 self.pp_target_point = self.auto_path[target_index]
-            # REVERTED 2026-08-28: the 2026-08-27 negation was based on one ambiguous data
-            # point, measured before the dt-cap and _replan_cooldown frame-vs-time bugs were
-            # found/fixed (theta tracking was still unreliable then). With the negation applied,
-            # logs now show a clean, reproducible runaway: theta climbing one-directionally from
-            # 33deg past 160deg over many steps while the target bearing stayed roughly constant
-            # around -20 to -45deg -- alpha (bearing-theta) growing instead of shrinking, the
-            # signature of a wrong-sign (diverging) feedback loop. Un-negating restores the
-            # standard pure-pursuit sign, which should converge instead of diverge.
-            left_pct, right_pct = twist_to_wheel_percent(v, omega)
-            self.cmd = (max(-24, min(24, left_pct)), max(-24, min(24, right_pct)))
+            # Confirmed 2026-08-27: pure_pursuit_command's omega>0 (which twist_to_wheel_speeds
+            # turns into right>left, i.e. the same "left<right" pattern verified via teleop A/CCW)
+            # produced a real CW rotation instead -- opposite of the teleop-verified convention.
+            # Negating omega here (not in twist_to_wheel_speeds itself, to avoid touching other
+            # callers) makes pursuit steering match the real robot's verified rotation sign.
+            left_pct, right_pct = twist_to_wheel_percent(v, -omega)
+            self.cmd = (max(-20, min(20, left_pct)), max(-20, min(20, right_pct)))
             if 0 <= target_index < len(self.auto_path):
                 tx, ty = self.auto_path[target_index]
                 bearing_deg = math.degrees(math.atan2(ty - self.est_pose.y, tx - self.est_pose.x))
@@ -558,26 +526,9 @@ class BeagleSimulator:
                 # not just the pure-straight case already verified earlier.
                 print(f"[distance debug] cmd=({left_cmd:.1f},{right_cmd:.1f}) theta={theta_before_deg:.1f}deg "
                       f"delta_left_m={delta_left_m:.5f} delta_right_m={delta_right_m:.5f} distance_m={distance_m:.5f}")
-            pose_before = self.est_pose
             self.est_pose = integrate_wheel_distances(
                 self.est_pose, delta_left_m, delta_right_m, wheel_base_m=0.0956, gyro_delta_rad=gyro_delta_rad
             )
-            if left_cmd > 0.0 or right_cmd > 0.0:
-                # Replicates integrate_wheel_distances' own math exactly (gyro_weight=0.65
-                # default) to show precisely which mid_theta the cos/sin actually used, and
-                # what x,y change that predicts -- vs. what actually happened. If these two
-                # disagree, the formula/its inputs are provably wrong here; if they agree,
-                # the "wrong direction" is coming from somewhere upstream of this call
-                # (mid_theta itself not matching reality) rather than the formula.
-                wheel_delta = (delta_right_m - delta_left_m) / 0.0956
-                delta_theta = 0.65 * gyro_delta_rad + 0.35 * wheel_delta
-                mid_theta = pose_before.theta + delta_theta / 2.0
-                pred_dx = distance_m * math.cos(mid_theta)
-                pred_dy = distance_m * math.sin(mid_theta)
-                actual_dx = self.est_pose.x - pose_before.x
-                actual_dy = self.est_pose.y - pose_before.y
-                print(f"[formula debug] mid_theta={math.degrees(mid_theta):.1f}deg "
-                      f"pred=({pred_dx:.4f},{pred_dy:.4f}) actual=({actual_dx:.4f},{actual_dy:.4f})")
             if abs(gyro_raw_dps - self._gyro_bias) > 5.0:
                 # Triggers on any sensed rotation, not just commanded turns -- lets this
                 # catch a hand-rotation test (cmd stays (0,0), only the gyro moves).
@@ -638,12 +589,7 @@ class BeagleSimulator:
             # unaffected (count-based, not dt-based), which is why only rotation looked wrong.
             # Raised to 1.0s: still guards against a genuine multi-second stall/pause, but no
             # longer clips normal frame timing.
-            # Lowered 1.0->0.5 on 2026-08-28: a single ~2.5s-dt outlier frame let the encoder
-            # distance integrate a ~15cm single-step position jump, which knocked pure_pursuit's
-            # lookahead target far enough off to help trigger a runaway (see the omega-sign
-            # revert above). 0.5s still comfortably covers the normal 0.28-0.4s frame time while
-            # bounding how big a single bad frame's jump can be.
-            now = time.monotonic(); dt = min(0.5, now - previous); previous = now
+            now = time.monotonic(); dt = min(1.0, now - previous); previous = now
             self.step(dt)
 
             true_pose = self.robot.pose

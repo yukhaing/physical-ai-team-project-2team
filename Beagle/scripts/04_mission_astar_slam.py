@@ -39,14 +39,14 @@ from common.comm import TriggerServer
 from common.geometry import Pose2D, polar_to_xy
 from common.lidar import cardinal_distances, valid_fraction
 from common.localization import localize, resolve_180_ambiguity, scan_multiple
-from common.motion import align_to_heading_command
+from common.motion import align_to_heading_command, dock_to_pose
 from common.robot import rectangle_segments
 from simulator.beagle_sim import BeagleSimulator, draw_planned_path, draw_pursuit_target
 
 ZONE_SIZE = 0.21  # 각 zone 사각형의 한 변 길이(m) -- 실측값
 ZONES = {
-    "receiving": (0.37, 0.34),
-    "defect": (0.78, 0.12),
+    "receiving": (0.35, 0.34),  # measured 2026-08-28: 35cm from left wall, 34cm from bottom wall
+    "defect": (0.73, 0.135),  # measured 2026-08-28: 73cm from left wall, 13.5cm from bottom wall
 }
 ZONE_COLORS = {
     "receiving": "#F5A623",
@@ -55,10 +55,13 @@ ZONE_COLORS = {
 ROOM_WIDTH_M = 0.90
 ROOM_HEIGHT_M = 0.70
 ROOM_BOUNDARY = rectangle_segments(0.0, 0.0, ROOM_WIDTH_M, ROOM_HEIGHT_M)  # 실측 방 치수 (90cm x 70cm)
+# OMX_CENTER는 실측 오차가 있을 수 있어 localize()/dock_to_pose()의 매칭 기준에 넣으면 오히려
+# 국소 최적점으로 끌려갈 수 있음 (2026-08-27 확인) -- 방 벽 4개만 기준으로 삼는다.
+LOCALIZE_SEGMENTS = ROOM_BOUNDARY
 # 사각형 벽만으로는 방 중심 기준 180도 대칭이라 LiDAR 매칭만으로는 실제 위치와 그 반대편
 # (예: (0,0) 근처를 (0.9,0.7) 근처로 착각)을 구분할 수 없음 -- OMX 로봇팔(15번 스크립트와
 # 동일 실측 위치)을 비대칭 기준물로 넣어야 localize_robot()이 어느 쪽인지 제대로 구분함.
-OMX_CENTER = (0.17, 0.65)  # measured 2026-08-27; was (0.17, 0.37) -- 28cm off, likely stale/wrong
+OMX_CENTER = (0.295, 0.34)  # measured 2026-08-28: 5.5cm left of receiving zone, same y row (0.34)
 OMX_RADIUS = 0.065
 OBSTACLE = rectangle_segments(
     OMX_CENTER[0] - OMX_RADIUS, OMX_CENTER[1] - OMX_RADIUS,
@@ -161,6 +164,11 @@ def main() -> None:
                              "exactly at ZONES['receiving'] with heading --start-theta (default 0). "
                              "Use when you physically place the robot at a fixed, known pose every "
                              "time, to remove localization error/instability as a variable.")
+    parser.add_argument("--dock", action="store_true",
+                        help="Before starting the mission, iteratively re-scan+localize and nudge "
+                             "the robot (turn/drive via gyro+encoder) until it sits within 1cm/3deg "
+                             "of ZONES['receiving'] facing 3 o'clock (heading=0deg). Use this instead "
+                             "of relying on hand-placement accuracy. Real hardware only.")
     args = parser.parse_args()
 
     sim = BeagleSimulator(
@@ -168,7 +176,18 @@ def main() -> None:
         Pose2D(*ZONES["receiving"], math.atan2(
             ZONES["defect"][1] - ZONES["receiving"][1], ZONES["defect"][0] - ZONES["receiving"][0]
         )),
-        odom_noise=0.06, use_slam=True, dry_run=args.dry_run,
+        # Confirmed 2026-08-28 via [formula debug]/[distance debug] logs: encoder+gyro
+        # dead-reckoning (integrate_wheel_distances) is correct -- predicted dx,dy from the
+        # mid_theta formula matched the actual pose delta exactly, every step. But the pos
+        # printed right after (post scan_match()) kept diverging from that in the OPPOSITE
+        # direction by several cm per frame. scan_match() runs every frame against a grid
+        # built from this same uncorrected pose estimate (self-referential), and was yanking
+        # est_pose backward relative to the correct odometry result -- this, not theta or the
+        # dead-reckoning math, was the real source of "moving opposite of theta" on real
+        # hardware. Disabled here; drift correction now comes from relocalize() instead (see
+        # 04_mission_astar_slam_relocalize.py), which re-localizes against the full LiDAR scan
+        # only at zone arrival instead of nudging the pose every single frame.
+        odom_noise=0.06, use_slam=False, dry_run=args.dry_run,
     )
 
     # 실물은 로봇이 receiving zone 안 정확히 어디에, 어느 방향으로 놓였는지 알 수 없으므로
@@ -196,12 +215,18 @@ def main() -> None:
         # so resolve_180_ambiguity() may pick the wrong (mirrored) heading. The real OMX
         # obstacle stays in SEGMENTS for A* planning/collision-avoidance -- only localization
         # skips it.
-        LOCALIZE_SEGMENTS = ROOM_BOUNDARY
         detected_pose, match_err_m = localize(scan, LOCALIZE_SEGMENTS, *ZONES["receiving"], search_radius=0.3)
         # 격자 탐색 해상도 때문에 180도 대칭 쌍(예: (0,0) 근처 vs (0.9,0.7) 근처) 중 더 잘
         # 맞는 쪽을 놓쳤을 수 있으니, 그 두 후보만 정밀하게 다시 채점해서 최종 확정합니다.
+        # Confirmed 2026-08-28: matching against LOCALIZE_SEGMENTS (walls only) here always
+        # ties exactly (a plain rectangle is perfectly 180-degree symmetric), so this pick was
+        # pure floating-point luck -- seen picking the wrong twin (38cm off). SEGMENTS (which
+        # includes OMX, now measured precisely as 5.5cm from receiving zone -- see OMX_CENTER)
+        # is the one place OMX's asymmetry is actually needed, so use it only for this
+        # disambiguation step; the coarse localize() search above still uses walls only to
+        # stay robust if OMX_CENTER ever drifts again.
         detected_pose, match_err_m = resolve_180_ambiguity(
-            scan, LOCALIZE_SEGMENTS, detected_pose, ROOM_WIDTH_M, ROOM_HEIGHT_M
+            scan, SEGMENTS, detected_pose, ROOM_WIDTH_M, ROOM_HEIGHT_M
         )
         if args.start_theta is not None:
             print(f"[--start-theta override] localize() said {math.degrees(detected_pose.theta) % 360.0:.0f}deg, "
@@ -222,6 +247,20 @@ def main() -> None:
             initial_state = "RETURN_TO_RECEIVING"
         else:
             print("이미 receiving zone 근처입니다.")
+
+    if args.dock and not args.dry_run:
+        # 3시 방향(clock-position 표현) == 방 x축(+x) 방향 == theta=0deg.
+        print("receiving zone에 정밀 도킹 중 (목표: 오차 1cm/3deg 이내, heading=3시 방향)...")
+        docked_pose, docked_ok = dock_to_pose(
+            sim.robot, LOCALIZE_SEGMENTS, ROOM_WIDTH_M, ROOM_HEIGHT_M,
+            *ZONES["receiving"], 0.0, disambiguation_segments=SEGMENTS, pos_tol_m=0.01,
+        )
+        sim.est_pose = docked_pose
+        sim.robot.pose = docked_pose
+        status = "성공" if docked_ok else "실패 (max_iters 소진 -- 그래도 가장 가까웠던 pose로 진행)"
+        print(f"[dock] {status}: ({docked_pose.x:.3f}, {docked_pose.y:.3f}) "
+              f"heading={math.degrees(docked_pose.theta):.1f}deg")
+        initial_state = "WAIT_FOR_BOX"
 
     mission = DeliveryMission(zones=ZONES, state=initial_state)
     server = TriggerServer(host="0.0.0.0", port=8765)
@@ -251,7 +290,15 @@ def main() -> None:
     try:
         while running["value"] and plt.fignum_exists(fig.number):
             now = time.monotonic()
-            dt = min(0.15, max(0.0, now - previous))
+            # Confirmed 2026-08-27 (in beagle_sim.py's own loop): matplotlib rendering
+            # routinely takes 0.28-0.4s+ per frame on real hardware, well over the old 0.15s
+            # cap, which silently discarded most of dt every frame and made gyro-based
+            # rotation tracking undercount real rotation by ~3-4x. This loop has its own
+            # separate dt calculation (doesn't go through beagle_sim.py's _run_loop()), so it
+            # needed the same fix independently.
+            # Lowered 1.0->0.5 on 2026-08-28 (see beagle_sim.py's matching fix note) -- a rare
+            # multi-second dt outlier could integrate a large single-step position jump.
+            dt = min(0.5, max(0.0, now - previous))
             previous = now
 
             for message in server.poll():
@@ -274,7 +321,9 @@ def main() -> None:
                 last_mission_state = mission.state
 
             if leg_phase == "ALIGNING":
-                left, right, aligned = align_to_heading_command(sim.est_pose, align_heading)
+                # turn_speed raised from the 10.0 default on 2026-08-27 to match the faster
+                # TRACKING speed (see beagle_sim.py's pure_pursuit speed_mps/wheel-clamp bump).
+                left, right, aligned = align_to_heading_command(sim.est_pose, align_heading, turn_speed=13.0)
                 sim.cmd = (left, right)
                 if aligned:
                     leg_phase = "TRACKING"

@@ -41,6 +41,8 @@
     "box_flag_path": "signals/box_placed.flag",
     "simulate_signal_interval_s": 3.0,
     "receiving_align_percent": 6.0,
-    "receiving_align_duration_s": 2.0
+    "receiving_align_duration_s": 2.0,
+    "relocalize_search_radius_m": 0.15,
+    "relocalize_max_error_m": 0.05
   }
 }

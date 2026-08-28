@@ -124,13 +124,8 @@ def scan_match(grid: OccupancyGridMap, pose: Pose2D, points_mm: list[tuple[float
 # ---------------------------------------------------------------- Simulator
 
 class BeagleSimulator:
-    # Confirmed 2026-08-27: these were frame counts (decremented by 1 per step(), regardless
-    # of dt), tuned assuming a fast ~30-50ms/frame loop. Real hardware's matplotlib-rendering
-    # loop routinely takes 0.28-0.4s+ per frame (see the dt-cap fix above), so the same frame
-    # budget turned into a near-360-degree spin during recovery instead of a brief nudge.
-    # Converted to real seconds so recovery duration stays correct regardless of frame rate.
-    _RECOVER_BACK_S = 0.6
-    _RECOVER_TURN_S = 0.9
+    _RECOVER_BACK_FRAMES = 14
+    _RECOVER_TURN_FRAMES = 22
 
     def __init__(self, segments: list[Segment], start: Pose2D,
                  odom_noise: float = 0.06, use_slam: bool = False, dry_run: bool = True) -> None:
@@ -186,11 +181,8 @@ class BeagleSimulator:
         self._ax_world = None
         self._replan_cooldown = 0
         self._blocked_streak = 0
-        self._recover_time_left = 0.0
+        self._recover_frames = 0
         self._recover_turn_dir = 1.0
-        self._recover_back_sign = -1.0
-        self._stall_check_pose: tuple[float, float] | None = None
-        self._stall_check_frames = 0
 
     # ---------------- Planning grid (rasterize walls + inflate by robot size)
     def _build_plan_grid(self):
@@ -240,14 +232,7 @@ class BeagleSimulator:
             result = None
         path = result.path if result else []
         if not path:
-            print('No path found'); self.status = 'NO_PATH'
-            # Previously left auto_path/auto_on untouched here, so pure pursuit kept driving
-            # the stale old path after a failed replan instead of stopping. Stop the robot
-            # until a new goal/replan actually succeeds.
-            self.auto_on = False
-            self.auto_path = []
-            self.cmd = (0.0, 0.0)
-            return
+            print('No path found'); self.status = 'NO_PATH'; return
         waypoints = reduce_waypoints(self.plan_grid, path)
         world_pts = grid_path_to_world(
             waypoints, resolution_m=res, origin_x_m=meta.origin_x_m, origin_y_m=meta.origin_y_m
@@ -335,49 +320,23 @@ class BeagleSimulator:
         # safety below zeroes forward speed), the "new" plan is just the same path
         # pointed the same direction -> instant re-block -> infinite replan loop.
         # Backing up first actually changes position/heading so the next plan differs.
-        if self._recover_time_left > 0:
-            self._recover_time_left -= dt
-            if self._recover_time_left > self._RECOVER_TURN_S:
-                # phase 1: straight away from whatever triggered recovery -- backward by
-                # default, but forward if the trigger was something close behind (backing up
-                # would just push further into it).
-                self.cmd = (14.0 * self._recover_back_sign, 14.0 * self._recover_back_sign)
+        if self._recover_frames > 0:
+            self._recover_frames -= 1
+            if self._recover_frames > self._RECOVER_TURN_FRAMES:
+                self.cmd = (-14.0, -14.0)  # phase 1: straight back, away from the wall
             else:
                 # phase 2: turn in place toward whichever side had more room when
                 # recovery started (see trigger below)
                 mag = 12.0 * self._recover_turn_dir
                 self.cmd = (-mag, mag)
             self.status = 'RECOVER'
-            if self._recover_time_left <= 0 and self.goal:
+            if self._recover_frames == 0 and self.goal:
                 # Replan now instead of resuming the stale pre-recovery path, which
                 # usually still routes past the same obstacle from the old approach
                 # angle and re-blocks almost immediately.
                 self.set_goal(*self.goal)
-        elif self.goal and not self.auto_path:
-            # Confirmed 2026-08-28: "No path found" left the robot frozen (cmd=(0,0),
-            # status=NO_PATH) forever -- nothing ever retried set_goal() again, even though
-            # the usual cause (est_pose sitting right at/outside the room boundary, so its
-            # start cell has no valid plan) is exactly what the existing back-up+turn recovery
-            # is meant to escape. Reuse it here instead of a bare retry, which would likely
-            # fail again immediately from the same stuck position.
-            self._replan_cooldown = max(0.0, self._replan_cooldown - dt)
-            if self._replan_cooldown <= 0:
-                print('No path found -> backing away before retrying')
-                self._recover_back_sign = -1.0
-                bearing_to_goal = math.atan2(self.goal[1] - self.est_pose.y, self.goal[0] - self.est_pose.x)
-                heading_diff = wrap_angle(bearing_to_goal - self.est_pose.theta)
-                self._recover_turn_dir = 1.0 if heading_diff > 0 else -1.0
-                self._recover_time_left = self._RECOVER_BACK_S + self._RECOVER_TURN_S
-                self._replan_cooldown = 1.5
-            self.status = 'NO_PATH'
         elif self.auto_on and self.auto_path:
-            # Confirmed 2026-08-28: this was also a frame count (like the recovery timer
-            # above), decremented by 1 regardless of dt. At the real ~0.3-0.4s/frame rate,
-            # the "40 frame" cooldown was actually blocking ALL blocked-detection (front/side/
-            # rear/stall) for 12-16 real seconds after any single replan/recover event -- seen
-            # rear stuck at ~70mm for many consecutive prints with zero "Stuck (...)" messages,
-            # because the cooldown gate below never reopened in time.
-            self._replan_cooldown = max(0.0, self._replan_cooldown - dt)
+            self._replan_cooldown = max(0, self._replan_cooldown - 1)
             # zone들이 원래 벽에 붙어 있으므로, 목적지에 이미 가까운 상태에서 벽이 가까운
             # 건 진짜 막힘이 아니라 정상적인 도착 과정임 -- 이 구간에서는 replan/recover를
             # 걸지 않고 pure pursuit이 그대로 도착까지 끝내게 둡니다 (아래 60mm 비상정지는
@@ -385,52 +344,22 @@ class BeagleSimulator:
             gx, gy = self.auto_path[-1]
             near_goal = math.hypot(self.est_pose.x - gx, self.est_pose.y - gy) < 0.15
             front_blocked = (not near_goal) and self.robot.front_lidar() < 110
-            # Front-only blocking missed real cases where the path grazed a wall/OMX on one
-            # side while front stayed clear (seen 2026-08-27: left=105-173mm, front=750-880mm,
-            # never triggered replan/recover). Added the same 110mm check on both sides.
-            side_blocked = (not near_goal) and (self.robot.left_lidar() < 110 or self.robot.right_lidar() < 110)
-            # Rear was never checked at all -- seen 2026-08-27: robot backed into the OMX
-            # obstacle's corner during an earlier recovery, ended up wedged with rear~80mm
-            # while front/left/right all read clear, so nothing ever detected it was stuck.
-            rear_blocked = (not near_goal) and self.robot.rear_lidar() < 110
-
-            # Sensor-distance checks alone can miss a stall where the robot oscillates in
-            # place without any single reading crossing a threshold (seen the same day:
-            # position wobbling within a ~3cm box for 15+ frames while nominally driving).
-            # Track displacement over a rolling ~1.5s window as a catch-all.
-            self._stall_check_frames += 1
-            stalled = False
-            if self._stall_check_pose is None:
-                self._stall_check_pose = (self.est_pose.x, self.est_pose.y)
-                self._stall_check_frames = 0
-            elif self._stall_check_frames >= 15:
-                moved = math.hypot(self.est_pose.x - self._stall_check_pose[0],
-                                    self.est_pose.y - self._stall_check_pose[1])
-                stalled = (not near_goal) and moved < 0.02
-                self._stall_check_pose = (self.est_pose.x, self.est_pose.y)
-                self._stall_check_frames = 0
-
             bx0, by0, bx1, by1 = self.bounds
             out_of_bounds = not (bx0 <= self.est_pose.x <= bx1 and by0 <= self.est_pose.y <= by1)
-            blocked = front_blocked or side_blocked or rear_blocked or out_of_bounds or stalled
+            blocked = front_blocked or out_of_bounds
             if not blocked:
                 self._blocked_streak = 0
             elif self._replan_cooldown == 0 and self.goal:
                 # Only counts once per replan attempt (every ~40 frames), not every
                 # frame it's blocked, so this tracks "replanned N times, still stuck".
-                # out_of_bounds/rear_blocked/stalled always go straight to back-up+turn (skip
-                # the single-replan first try): replanning from outside the grid isn't
-                # reliable, backing INTO a rear obstacle would make things worse, and a stall
-                # with nothing over threshold means replanning the same path won't help either.
+                # out_of_bounds always goes straight to back-up+turn (skips the single-replan
+                # first try) since replanning A* from a position outside the room's own grid
+                # isn't reliable -- backing up first gets the estimate back inside before
+                # the next plan is attempted.
                 self._blocked_streak += 1
-                if self._blocked_streak >= 2 or out_of_bounds or rear_blocked or stalled:
-                    reason = ('outside room boundary' if out_of_bounds else
-                              'rear blocked' if rear_blocked else
-                              'stalled' if stalled else 'near obstacle')
+                if self._blocked_streak >= 2 or out_of_bounds:
+                    reason = 'outside room boundary' if out_of_bounds else 'near obstacle'
                     print(f'Stuck ({reason}) -> backing away before replanning')
-                    # Backing up when something is close behind would push further into it --
-                    # drive forward instead in that specific case.
-                    self._recover_back_sign = 1.0 if rear_blocked else -1.0
                     if self.goal:
                         # 어느 쪽이 더 뚫려 있는지가 아니라, 목적지 방향으로 도는 게 더
                         # 목적에 맞음 -- "더 뚫린 쪽"은 종종 목적지와 반대 방향이라 회복이
@@ -440,45 +369,23 @@ class BeagleSimulator:
                         self._recover_turn_dir = 1.0 if heading_diff > 0 else -1.0
                     else:
                         self._recover_turn_dir = 1.0 if self.robot.left_lidar() >= self.robot.right_lidar() else -1.0
-                    self._recover_time_left = self._RECOVER_BACK_S + self._RECOVER_TURN_S
+                    self._recover_frames = self._RECOVER_BACK_FRAMES + self._RECOVER_TURN_FRAMES
                     self._blocked_streak = 0
                 else:
                     print('Front blocked -> replanning path')
                     self.set_goal(*self.goal)
-                self._replan_cooldown = 1.5  # seconds, not frames -- see the fix note above
+                self._replan_cooldown = 40
             # lookahead_m=0.30 / speed_mps=0.11 were sized for the old 2.4x2.4m room -- 0.11 m/s
             # alone is ~34% wheel command (wheel_percent_to_mps(100%)=0.324 m/s), already over the
             # 25% safety ceiling before the clamp below even applies, and a 30cm lookahead is a
             # third of the new 0.9x0.7m room's width. Scaled down to stay in the 10~15% range and
             # keep the lookahead proportional to the smaller room.
-            # Raised 0.12->0.16 on 2026-08-27: omega=2*v*sin(alpha)/lookahead means a short
-            # lookahead makes steering very sensitive to heading-estimate noise/lag, which
-            # showed up as a visible S-curve wobble around the pursuit target instead of a
-            # smooth line -- a longer lookahead trades a little corner-cutting for a steadier
-            # correction.
-            # speed_mps 0.08 (2026-08-27) turned out too high: wheel_percent_to_mps(100%)=
-            # 0.324 m/s means v=0.08 alone needs ~24.7% wheel command, which by itself already
-            # sits at/above the 20% clamp -- leaving ZERO headroom for omega's steering
-            # differential. Confirmed in logs: wheel=(20,20) for many consecutive steps despite
-            # meaningfully nonzero omega, i.e. steering was being silently clipped away, which
-            # is why it couldn't turn onto the defect-zone bearing. Rebalanced 2026-08-28:
-            # speed_mps=0.06 (~18.5% baseline) + ceiling 24 (just under SafeBeagle's max_speed=
-            # 25) leaves ~5.5% for the differential -- still faster than the original 0.05, but
-            # actually leaves steering room this time.
             v, omega, target_index = pure_pursuit_command(
-                self.est_pose, self.auto_path, lookahead_m=0.10, speed_mps=0.05)
+                self.est_pose, self.auto_path, lookahead_m=0.12, speed_mps=0.05)
             if 0 <= target_index < len(self.auto_path):
                 self.pp_target_point = self.auto_path[target_index]
-            # REVERTED 2026-08-28: the 2026-08-27 negation was based on one ambiguous data
-            # point, measured before the dt-cap and _replan_cooldown frame-vs-time bugs were
-            # found/fixed (theta tracking was still unreliable then). With the negation applied,
-            # logs now show a clean, reproducible runaway: theta climbing one-directionally from
-            # 33deg past 160deg over many steps while the target bearing stayed roughly constant
-            # around -20 to -45deg -- alpha (bearing-theta) growing instead of shrinking, the
-            # signature of a wrong-sign (diverging) feedback loop. Un-negating restores the
-            # standard pure-pursuit sign, which should converge instead of diverge.
             left_pct, right_pct = twist_to_wheel_percent(v, omega)
-            self.cmd = (max(-24, min(24, left_pct)), max(-24, min(24, right_pct)))
+            self.cmd = (max(-15, min(15, left_pct)), max(-15, min(15, right_pct)))
             if 0 <= target_index < len(self.auto_path):
                 tx, ty = self.auto_path[target_index]
                 bearing_deg = math.degrees(math.atan2(ty - self.est_pose.y, tx - self.est_pose.x))
@@ -486,25 +393,17 @@ class BeagleSimulator:
                       f"theta={math.degrees(self.est_pose.theta):.1f}deg target=({tx:.3f},{ty:.3f}) "
                       f"bearing={bearing_deg:.1f}deg v={v:.3f} omega={omega:.3f} "
                       f"wheel=({self.cmd[0]:.1f},{self.cmd[1]:.1f})")
-            if not self.auto_path:
-                # The single-replan attempt above ("Front blocked -> replanning path") can
-                # call set_goal() mid-frame, which clears auto_path/auto_on and stops the
-                # robot if it hit "No path found" -- crashed here before (IndexError on an
-                # empty auto_path) since the rest of this frame still assumed a path existed.
+            gx, gy = self.auto_path[-1]
+            # 0.08 (8cm) was nearly as big as the 21cm zone's own half-width (10.5cm), so it
+            # accepted "near the edge" as arrived instead of driving to the actual center.
+            if math.hypot(self.est_pose.x - gx, self.est_pose.y - gy) < 0.03:
+                self.auto_on = False
                 self.cmd = (0.0, 0.0)
-                self.status = 'NO_PATH'
+                self.status = 'GOAL!'
+                self.pp_target_point = None
+                print('Goal reached')
             else:
-                gx, gy = self.auto_path[-1]
-                # 0.08 (8cm) was nearly as big as the 21cm zone's own half-width (10.5cm), so it
-                # accepted "near the edge" as arrived instead of driving to the actual center.
-                if math.hypot(self.est_pose.x - gx, self.est_pose.y - gy) < 0.03:
-                    self.auto_on = False
-                    self.cmd = (0.0, 0.0)
-                    self.status = 'GOAL!'
-                    self.pp_target_point = None
-                    print('Goal reached')
-                else:
-                    self.status = 'AUTO'
+                self.status = 'AUTO'
         else:
             self.pp_target_point = None
 
@@ -558,26 +457,9 @@ class BeagleSimulator:
                 # not just the pure-straight case already verified earlier.
                 print(f"[distance debug] cmd=({left_cmd:.1f},{right_cmd:.1f}) theta={theta_before_deg:.1f}deg "
                       f"delta_left_m={delta_left_m:.5f} delta_right_m={delta_right_m:.5f} distance_m={distance_m:.5f}")
-            pose_before = self.est_pose
             self.est_pose = integrate_wheel_distances(
                 self.est_pose, delta_left_m, delta_right_m, wheel_base_m=0.0956, gyro_delta_rad=gyro_delta_rad
             )
-            if left_cmd > 0.0 or right_cmd > 0.0:
-                # Replicates integrate_wheel_distances' own math exactly (gyro_weight=0.65
-                # default) to show precisely which mid_theta the cos/sin actually used, and
-                # what x,y change that predicts -- vs. what actually happened. If these two
-                # disagree, the formula/its inputs are provably wrong here; if they agree,
-                # the "wrong direction" is coming from somewhere upstream of this call
-                # (mid_theta itself not matching reality) rather than the formula.
-                wheel_delta = (delta_right_m - delta_left_m) / 0.0956
-                delta_theta = 0.65 * gyro_delta_rad + 0.35 * wheel_delta
-                mid_theta = pose_before.theta + delta_theta / 2.0
-                pred_dx = distance_m * math.cos(mid_theta)
-                pred_dy = distance_m * math.sin(mid_theta)
-                actual_dx = self.est_pose.x - pose_before.x
-                actual_dy = self.est_pose.y - pose_before.y
-                print(f"[formula debug] mid_theta={math.degrees(mid_theta):.1f}deg "
-                      f"pred=({pred_dx:.4f},{pred_dy:.4f}) actual=({actual_dx:.4f},{actual_dy:.4f})")
             if abs(gyro_raw_dps - self._gyro_bias) > 5.0:
                 # Triggers on any sensed rotation, not just commanded turns -- lets this
                 # catch a hand-rotation test (cmd stays (0,0), only the gyro moves).
@@ -638,12 +520,7 @@ class BeagleSimulator:
             # unaffected (count-based, not dt-based), which is why only rotation looked wrong.
             # Raised to 1.0s: still guards against a genuine multi-second stall/pause, but no
             # longer clips normal frame timing.
-            # Lowered 1.0->0.5 on 2026-08-28: a single ~2.5s-dt outlier frame let the encoder
-            # distance integrate a ~15cm single-step position jump, which knocked pure_pursuit's
-            # lookahead target far enough off to help trigger a runaway (see the omega-sign
-            # revert above). 0.5s still comfortably covers the normal 0.28-0.4s frame time while
-            # bounding how big a single bad frame's jump can be.
-            now = time.monotonic(); dt = min(0.5, now - previous); previous = now
+            now = time.monotonic(); dt = min(1.0, now - previous); previous = now
             self.step(dt)
 
             true_pose = self.robot.pose
