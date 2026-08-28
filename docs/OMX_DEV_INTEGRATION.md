@@ -9,7 +9,7 @@
 - `scripts/yolo_target_bridge_node.py`: `/yolo/selected_box`의 불량 판정·신뢰도·작업영역·좌표 안정성을 확인한 뒤 `/camera_box_target`을 발행한다.
 - `sorting_orchestrator_node.py`: 같은 `/yolo/selected_box`에서 불량을 확인하면 먼저 Beagle 이송을 시작한다. Beagle 도착 후 OMX 흐름을 시작하면 YOLO bridge가 안정 타깃을 전달한다.
 
-캘리브레이션 결과는 Git에 올리지 않는 `omx/runtime/calibration/active.yaml`에 저장된다. 재보정은 이 파일만 바꾸므로 GUI와 Beagle 제어 코드에 영향을 주지 않는다.
+캘리브레이션 결과는 현재 `runtime/calibration/active.yaml`에 저장된다. 재보정은 이 파일만 바꾸므로 GUI와 Beagle 제어 코드에 영향을 주지 않는다.
 
 ## 보정
 
