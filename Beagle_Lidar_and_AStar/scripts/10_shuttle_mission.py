@@ -78,14 +78,20 @@ def main() -> None:
                               "common/navigate.py's goto_zone() docstring): live obstacle "
                               "detection/replanning while driving.")
     parser.add_argument("--align", action="store_true",
-                         help="EXPERIMENTAL, off by default: run find_pose() final alignment "
-                              "after arriving (see common/navigate.py's goto_zone() docstring "
-                              "for its unresolved accuracy issue at defect).")
-    parser.add_argument("--no-align-heading", action="store_true",
-                         help="Disable even the lightweight heading-only realign_heading() that "
-                              "runs by default when --align is off -- NOT recommended, see "
-                              "common/navigate.py's goto_zone() docstring (skipping it left the "
-                              "next leg's dead-reckoning ~205deg off and drove toward a wall).")
+                         help="Off by default: run the OLDER find_pose() (linearized single-scan "
+                              "estimate) final alignment instead of --align-map -- kept for "
+                              "comparison only, observed to diverge at defect (see "
+                              "common/navigate.py's goto_zone() docstring).")
+    parser.add_argument("--no-align-map", action="store_true",
+                         help="Disable the default final alignment (find_pose_via_map(), heading "
+                              "AND position via the frozen map) -- NOT recommended, this is the "
+                              "load-bearing default (see common/navigate.py's goto_zone() "
+                              "docstring). Falls back to --align-heading if also passed, else no "
+                              "alignment at all (unsafe -- corrupts the next leg's dead-reckoning).")
+    parser.add_argument("--align-heading", action="store_true",
+                         help="Off by default: run the older heading-ONLY realign_heading() "
+                              "instead of --align-map (see common/navigate.py's goto_zone() "
+                              "docstring).")
     args = parser.parse_args()
 
     cfg = load_json(CONFIG_PATH)
@@ -124,7 +130,7 @@ def main() -> None:
             print("\n===== GOTO_DEFECT =====")
             ok = goto_zone(hw, cfg, distance_field, obstacles, "receiving", "defect", defect_ref,
                            dynamic_obstacles=args.dynamic_obstacles, align=args.align,
-                           align_heading=not args.no_align_heading)
+                           align_map=not args.no_align_map, align_heading=args.align_heading)
             if not ok:
                 print("[stop] did not converge at defect -- stopping mission.")
                 break
@@ -135,7 +141,7 @@ def main() -> None:
             print("\n===== GOTO_RECEIVING =====")
             ok = goto_zone(hw, cfg, distance_field, obstacles, "defect", "receiving", receiving_ref,
                            dynamic_obstacles=args.dynamic_obstacles, align=args.align,
-                           align_heading=not args.no_align_heading)
+                           align_map=not args.no_align_map, align_heading=args.align_heading)
             if not ok:
                 print("[stop] did not converge at receiving -- stopping mission.")
                 break

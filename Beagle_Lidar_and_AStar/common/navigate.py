@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 
-from common.dock import REALIGN_TOL_DEG, SANITY_MATCH_ERR_M, find_pose, realign_heading
+from common.dock import REALIGN_TOL_DEG, SANITY_MATCH_ERR_M, find_pose, find_pose_via_map, realign_heading
 from common.geometry import Pose2D, wrap_angle
 from common.lidar import Segment, rectangle_segments
 from common.localize import checkpoint_correct
@@ -27,6 +27,17 @@ from common.scan_align import mask_from_angle_range
 LOCALIZE_INTERVAL_S = 3.0
 LOCALIZE_SEARCH_RADIUS_M = 0.05  # only needs to cover drift since the LAST correction, not a cold search
 LOCALIZE_THETA_STEPS = 90
+# This room is a rectangle (180deg rotational symmetry) -- a full-circle
+# theta search can occasionally lock onto the exact 180deg-flipped heading
+# instead of the true one when the robot's out in open floor space, away
+# from any single asymmetric feature (confirmed 2026-09-01: a live mission
+# run's heading flipped ~170deg in one localize_from_map() call mid-drive,
+# and the robot then drove on that wrong belief). Odometry only drifts a few
+# degrees between corrections (see LOCALIZE_INTERVAL_S above), so it's a
+# trustworthy-enough prior to search a window around instead of the full
+# circle -- wide enough (90deg) to still catch a real, larger heading error,
+# narrow enough that the 180deg-away candidate is never even considered.
+LOCALIZE_THETA_WINDOW_DEG = 90.0
 
 # Extra pause between drive_with_localization() finishing and find_pose()
 # taking its first scan -- separate from (and on top of) common/dock.py's own
@@ -341,6 +352,7 @@ def drive_with_localization(
                 localized, match_err = localize_from_map(
                     scan, distance_field, pose.x, pose.y,
                     pos_search_radius_m=localize_search_radius_m, theta_steps=localize_theta_steps,
+                    theta_center=pose.theta, theta_range=math.radians(LOCALIZE_THETA_WINDOW_DEG),
                 )
                 dx_cm = (localized.x - pose.x) * 100.0
                 dy_cm = (localized.y - pose.y) * 100.0
@@ -384,55 +396,62 @@ def drive_with_localization(
 def goto_zone(
     hw, cfg: dict, distance_field: DistanceField, obstacles: list,
     from_name: str, to_name: str, to_reference_scan: list[float],
-    dynamic_obstacles: bool = False, align: bool = False, align_heading: bool = True,
+    dynamic_obstacles: bool = False, align: bool = False, align_map: bool = True,
+    align_heading: bool = False,
 ) -> bool:
     """One full leg between two named zones in `cfg`'s "zones" (course_config.json):
     plans an A* path (avoiding `obstacles`, see data/obstacle_map.json), drives
     it with drive_with_localization() (continuous odometry + periodic map
-    localization), then finishes with an alignment stage (see align/align_heading
-    below) against `to_reference_scan`. Shared by scripts/09_goto_zone_slam.py
-    and scripts/10_shuttle_mission.py so the drive-then-align sequence only
-    lives in one place.
+    localization), then finishes with an alignment stage (see
+    align/align_map/align_heading below) against `to_name`'s zone. Shared by
+    scripts/09_goto_zone_slam.py and scripts/10_shuttle_mission.py so the
+    drive-then-align sequence only lives in one place. Checked in this
+    priority order if more than one is True: align, then align_map, then
+    align_heading.
 
-    dynamic_obstacles and align default OFF (2026-09-01) -- this is the last
-    configuration confirmed working end-to-end on real hardware (plain A* over
-    the static obstacle map + drive_with_localization). Re-enable explicitly
-    via --dynamic-obstacles/--align on scripts 09/10 once each is
-    independently confirmed safe again:
+    align_map (common/dock.py's find_pose_via_map(), heading AND position via
+    localize_from_map()'s wide-radius grid search against the frozen
+    point-cloud map -- NOT `to_reference_scan`) is the default alignment
+    (2026-09-01). Supersedes align_heading as the load-bearing default (every
+    leg's start_pose below is taken from `to_name`'s CONFIGURED heading_deg,
+    so leaving the robot's actual heading uncorrected breaks the NEXT leg's
+    dead-reckoning, confirmed 2026-09-01 to drive it toward a room corner)
+    AND gives real position precision align_heading alone doesn't. Replaced
+    align as the default the same day: find_pose_via_map() converged in a
+    single iteration at both zones (match_err ~5-6mm, 0cm position error) in
+    real-hardware testing, where align (find_pose(), the linearized estimate)
+    was observed to actively diverge at defect (position error growing
+    7.8cm -> 12.1cm across repeated "corrections").
+
+    align (common/dock.py's find_pose()) and align_heading
+    (common/dock.py's realign_heading(), heading ONLY, no position) are kept
+    for comparison/fallback, both default OFF. dynamic_obstacles also
+    defaults OFF -- this is the last configuration confirmed working
+    end-to-end on real hardware (plain A* over the static obstacle map +
+    drive_with_localization). Re-enable explicitly via --dynamic-obstacles/
+    --align on scripts 09/10:
       - dynamic_obstacles: caused a severe regression the same day -- a
-        pre-existing common/mapping.py localize_from_map() bug (no 180deg
-        heading-ambiguity resolution) flipped the believed heading ~180deg
-        mid-drive, and dynamic obstacle detection then trusted that corrupted
-        pose, replanning repeatedly against phantom "obstacles" until it
-        reported the path fully blocked. The 180deg bug predates this
-        feature and isn't fixed by turning this off, but without this
-        feature such a misread just left the robot somewhat off-target
-        instead of aborting the whole leg.
-      - align (common/dock.py's find_pose(), heading AND position): has an
-        unresolved, not-yet-understood accuracy problem at the defect zone
-        (see common/dock.py's history/comments) even after several rounds of
-        fixes (settle timing, arm-position masking, a residual sanity gate).
-
-    align_heading (common/dock.py's realign_heading(), heading ONLY) defaults
-    ON, separately from align -- this is not optional precision, it's load
-    bearing: every leg's start_pose (below) is taken from `to_name`'s
-    CONFIGURED heading_deg, not whatever heading the robot actually ends up
-    at, so the NEXT leg's dead-reckoning assumes the robot is already facing
-    that heading. Confirmed 2026-09-01: running with align=False and
-    align_heading also effectively off left the robot ~205deg off from what
-    the next leg assumed, and dead-reckoning drove it toward a corner of the
-    room before it was stopped -- not just imprecise, actively unsafe. If
-    align=True, align_heading is redundant (find_pose fixes heading too) and
-    skipped.
+        common/mapping.py localize_from_map() bug (a full-circle theta search
+        can lock onto the exact 180deg-flipped heading in this rectangular,
+        180deg-symmetric room) flipped the believed heading ~180deg mid-drive,
+        and dynamic obstacle detection then trusted that corrupted pose,
+        replanning repeatedly against phantom "obstacles" until it reported
+        the path fully blocked. The 180deg bug itself was fixed the same day
+        (localize_from_map() gained an optional theta_center/theta_range to
+        search a window around a trusted heading prior instead of the full
+        circle; drive_with_localization()'s own periodic checkpoint now
+        passes its tracked odometry heading as that prior -- see
+        LOCALIZE_THETA_WINDOW_DEG below), but dynamic_obstacles hasn't been
+        re-tested against that fix yet, so it stays off until it has.
 
     `dynamic_obstacles=True` has drive_with_localization() also
     watch for a NEW obstacle (not in `obstacles`) blocking the path and
     replan around it live -- see drive_with_localization()'s docstring.
     Pass False to skip that and only avoid what's in `obstacles`.
 
-    Returns whether the leg fully succeeded (find_pose()/realign_heading()
-    converged, or the drive alone if both align and align_heading are False --
-    AND no new obstacle left the robot with no way through)."""
+    Returns whether the leg fully succeeded (the chosen alignment stage
+    converged, or the drive alone if align/align_map/align_heading are all
+    False -- AND no new obstacle left the robot with no way through)."""
     boundary = cfg["boundary"]
     from_zone = cfg["zones"][from_name]
     to_zone = cfg["zones"][to_name]
@@ -468,6 +487,16 @@ def goto_zone(
         print(f"[align] final precise alignment at {to_name} via find_pose() "
               f"(sanity={sanity_match_err_m * 1000:.0f}mm)...")
         converged = find_pose(hw, to_reference_scan, mask=mask, sanity_match_err_m=sanity_match_err_m)
+        print("RESULT:", f"arrived and converged at {to_name}" if converged
+              else f"drove to {to_name} but did NOT fully converge there -- see log above")
+        return converged
+
+    if align_map:
+        time.sleep(ARRIVAL_SETTLE_S)
+        print(f"[align] final precise alignment at {to_name} via find_pose_via_map()...")
+        converged = find_pose_via_map(
+            hw, distance_field, to_zone["x_m"], to_zone["y_m"], math.radians(to_zone["heading_deg"]),
+        )
         print("RESULT:", f"arrived and converged at {to_name}" if converged
               else f"drove to {to_name} but did NOT fully converge there -- see log above")
         return converged

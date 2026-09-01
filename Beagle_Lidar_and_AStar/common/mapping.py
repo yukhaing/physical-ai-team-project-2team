@@ -117,14 +117,32 @@ def build_distance_field(
 def localize_from_map(
     scan: list[float], distance_field: DistanceField, guess_x: float, guess_y: float,
     pos_search_radius_m: float = 0.15, pos_step_m: float = 0.01, theta_steps: int = 180,
-    max_range_m: float = 5.0,
+    max_range_m: float = 5.0, theta_center: float | None = None, theta_range: float = 2.0 * math.pi,
 ) -> tuple[Pose2D, float]:
     """Wide-radius grid search over (x, y, theta) for the pose whose scan best
     matches the observed `scan` against `distance_field` (build_distance_field())
     -- the genuine "where am I" tool. Unlike common/dock.py's find_pose() (a
     fast linearized estimate that only trusts small offsets from an
-    already-known pose), this searches a real position radius and the full
-    360deg heading, so it doesn't carry that small-offset assumption.
+    already-known pose), this searches a real position radius and (by
+    default) the full 360deg heading, so it doesn't carry that small-offset
+    assumption.
+
+    `theta_center`/`theta_range`: search only `theta_range` radians centered
+    on `theta_center` instead of the full circle. This room is a rectangle,
+    which has 180deg rotational symmetry -- out in open floor space, away
+    from any single asymmetric feature (a zone's captured corner, an
+    obstacle), the true heading and its exact 180deg flip can score nearly
+    identically, and noise alone can tip a full-circle search to the wrong
+    one. Confirmed 2026-09-01 during a live mission run: a full-circle call
+    mid-drive flipped the believed heading by ~170deg in one step, and the
+    robot then drove on that wrong belief. Callers that already have a
+    continuously-tracked heading prior (e.g. drive_with_localization()'s own
+    odometry, which only drifts a few degrees between corrections) should
+    pass that as `theta_center` with a generous-but-bounded `theta_range`
+    (e.g. 90deg) -- wide enough to still catch a real, larger heading error,
+    narrow enough that the 180deg-away candidate is never even considered.
+    Callers with no such prior (a true cold start) should leave this at the
+    full-circle default.
 
     For each candidate heading, rotates the scan's own points into world frame
     at every candidate (x, y) at once, and scores each candidate pose by the
@@ -146,7 +164,8 @@ def localize_from_map(
     xs = guess_x + np.arange(-steps, steps + 1) * pos_step_m
     ys = guess_y + np.arange(-steps, steps + 1) * pos_step_m
     XX, YY = np.meshgrid(xs, ys, indexing="ij")  # (X, Y)
-    thetas = np.linspace(0.0, 2.0 * math.pi, theta_steps, endpoint=False)
+    theta_start = 0.0 if theta_center is None else theta_center - theta_range / 2.0
+    thetas = theta_start + np.linspace(0.0, theta_range, theta_steps, endpoint=False)
 
     best_score = math.inf
     best_x = guess_x

@@ -57,16 +57,34 @@ class Hardware:
         self._last_left_count: float | None = None
         self._last_right_count: float | None = None
 
-    def start_lidar(self, timeout_s: float = 4.0) -> None:
+    def start_lidar(self, timeout_s: float = 10.0, resend_interval_s: float = 3.0) -> None:
         """Poll for LiDAR readiness with our own deadline instead of calling the
         SDK's wait_until_lidar_ready() directly -- that call blocks forever (no
         internal timeout) when nothing is actually connected, which would hang
-        any script that runs it with no way to tell "disconnected" from "slow"."""
+        any script that runs it with no way to tell "disconnected" from "slow".
+
+        Raised from 4.0 to 10.0 (2026-09-01): reliably timed out on the very
+        first run right after power-cycling the physical robot -- confirmed
+        the robot WAS connected and became ready shortly after, just past the
+        old deadline. That alone wasn't always enough though: seen timing out
+        again even at 10.0s the same day, immediately after a successful
+        serial connect ("Beagle[0] Connected") -- i.e. genuinely no reply to
+        start_lidar() at all, not just a slow one, suggesting the initial
+        command itself can be dropped (BLE/serial hiccup right after a fresh
+        connection) rather than just needing more patience. Re-sends
+        start_lidar() to the SDK every `resend_interval_s` while still
+        waiting, in case a resend gets through where the first one didn't --
+        cheap and harmless if the first one DID arrive (the SDK command is
+        idempotent, already-spinning LiDAR just keeps spinning)."""
         self.robot.start_lidar()
         deadline = time.monotonic() + timeout_s
+        next_resend = time.monotonic() + resend_interval_s
         while time.monotonic() < deadline:
             if self.robot.is_lidar_ready():
                 return
+            if time.monotonic() >= next_resend:
+                self.robot.start_lidar()
+                next_resend = time.monotonic() + resend_interval_s
             time.sleep(0.05)
         raise TimeoutError(
             f"LiDAR not ready after {timeout_s:.1f}s -- is the robot actually connected/powered on?"
