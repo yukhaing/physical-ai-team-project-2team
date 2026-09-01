@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 
-from common.dock import find_pose, realign_heading
+from common.dock import REALIGN_TOL_DEG, SANITY_MATCH_ERR_M, find_pose, realign_heading
 from common.geometry import Pose2D, wrap_angle
 from common.lidar import Segment, rectangle_segments
 from common.localize import checkpoint_correct
@@ -18,8 +18,13 @@ from common.scan_align import mask_from_angle_range
 # continuous odometry runs every control tick in between (integrate_real_dead_reckoning()),
 # this just bounds how far it can drift before the next correction. Tuned
 # 2026-08-31 once localize_from_map() got fast (~0.65s/call, DistanceField) --
-# not practical at ~80s/call.
-LOCALIZE_INTERVAL_S = 1.5
+# not practical at ~80s/call. Raised from 1.5 to 3.0 (2026-09-01) to cut the
+# number of stop-scan-resume interruptions roughly in half for smoother
+# driving -- real-hardware corrections at 1.5s intervals were consistently
+# small (~1-5cm, ~1-5deg per checkpoint, see mission logs), so doubling the
+# gap between corrections shouldn't let drift grow past what the 5cm search
+# radius below can still recover.
+LOCALIZE_INTERVAL_S = 3.0
 LOCALIZE_SEARCH_RADIUS_M = 0.05  # only needs to cover drift since the LAST correction, not a cold search
 LOCALIZE_THETA_STEPS = 90
 
@@ -64,7 +69,11 @@ WHEEL_BASE_M = 0.0956
 # per cm traveled than the straight/turn-only motions the encoder+gyro
 # calibration constants were measured from).
 CHECKPOINT_INTERVAL_M = 0.08
-CHECKPOINT_SETTLE_S = 0.15
+# Lowered from 0.15 to 0.1 (2026-09-01) to shave a bit off each stop-scan-resume
+# pause during drive_with_localization()'s periodic map checkpoints -- smaller
+# win than LOCALIZE_INTERVAL_S above, but free (this is just a wait before
+# trusting the scan post-stop, not a measurement itself).
+CHECKPOINT_SETTLE_S = 0.1
 
 # Measured 2026-08-31 via scripts/00b_check_drive_direction.py: 10% wheel
 # command for 1.0s produced ~3.35cm forward per wheel -- roughly 0.00335 m/s
@@ -455,16 +464,20 @@ def goto_zone(
 
     if align:
         time.sleep(ARRIVAL_SETTLE_S)
-        print(f"[align] final precise alignment at {to_name} via find_pose()...")
-        converged = find_pose(hw, to_reference_scan, mask=mask)
+        sanity_match_err_m = to_zone.get("match_sanity_mm", SANITY_MATCH_ERR_M * 1000.0) / 1000.0
+        print(f"[align] final precise alignment at {to_name} via find_pose() "
+              f"(sanity={sanity_match_err_m * 1000:.0f}mm)...")
+        converged = find_pose(hw, to_reference_scan, mask=mask, sanity_match_err_m=sanity_match_err_m)
         print("RESULT:", f"arrived and converged at {to_name}" if converged
               else f"drove to {to_name} but did NOT fully converge there -- see log above")
         return converged
 
     if align_heading:
         time.sleep(ARRIVAL_SETTLE_S)
-        print(f"[align] heading-only realignment at {to_name} via realign_heading()...")
-        converged, match_err = realign_heading(hw, to_reference_scan, mask=mask)
+        heading_tol_deg = to_zone.get("heading_tol_deg", REALIGN_TOL_DEG)
+        print(f"[align] heading-only realignment at {to_name} via realign_heading() "
+              f"(tol={heading_tol_deg:.0f}deg)...")
+        converged, match_err = realign_heading(hw, to_reference_scan, mask=mask, tol_deg=heading_tol_deg)
         print("RESULT:", f"arrived, heading aligned at {to_name} (match_err={match_err * 1000:.0f}mm)"
               if converged else
               f"arrived at {to_name} but heading did NOT converge (match_err={match_err * 1000:.0f}mm) "

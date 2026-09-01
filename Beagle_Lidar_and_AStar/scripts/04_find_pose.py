@@ -20,7 +20,7 @@ Uses the SAME reference scan as script 03 -- no separate capture needed.
 import argparse
 import json
 
-from common.dock import find_pose
+from common.dock import SANITY_MATCH_ERR_M, find_pose
 from common.hw import Hardware
 from common.scan_align import mask_from_angle_range
 
@@ -50,10 +50,15 @@ def main() -> None:
         print(f"[mask] excluding {len(mask)}/{len(reference_scan)} rays "
               f"({exclude_deg_range[0]:+.0f}deg to {exclude_deg_range[1]:+.0f}deg) -- non-static scene element")
 
+    sanity_match_err_m = cfg["zones"][args.zone].get("match_sanity_mm", SANITY_MATCH_ERR_M * 1000.0) / 1000.0
+    if sanity_match_err_m != SANITY_MATCH_ERR_M:
+        print(f"[sanity] using {sanity_match_err_m * 1000:.0f}mm match-quality threshold for {args.zone} "
+              f"(default {SANITY_MATCH_ERR_M * 1000:.0f}mm)")
+
     hw = Hardware()
     try:
         hw.start_lidar()
-        converged = find_pose(hw, reference_scan, mask=mask)
+        converged = find_pose(hw, reference_scan, mask=mask, sanity_match_err_m=sanity_match_err_m)
     finally:
         hw.stop()
 

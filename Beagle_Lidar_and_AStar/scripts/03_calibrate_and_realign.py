@@ -115,17 +115,19 @@ def realign_sim(pose: Pose2D, wall_segments, reference_scan: list[float]) -> Pos
     return pose
 
 
-def realign_real(reference_scan: list[float], mask: set[int] | None = None) -> None:
+def realign_real(reference_scan: list[float], mask: set[int] | None = None,
+                  tol_deg: float | None = None) -> None:
     """Real hardware: rotate in place until the live LiDAR scan matches
     `reference_scan`. Delegates to common/dock.py's realign_heading() so this
     and scripts/04_dock_position_and_heading.py share one implementation."""
-    from common.dock import realign_heading
+    from common.dock import REALIGN_TOL_DEG, realign_heading
     from common.hw import Hardware
 
     hw = Hardware()
     try:
         hw.start_lidar()
-        converged, _ = realign_heading(hw, reference_scan, mask=mask)
+        converged, _ = realign_heading(hw, reference_scan, mask=mask,
+                                        tol_deg=tol_deg if tol_deg is not None else REALIGN_TOL_DEG)
         if converged:
             print("[realign] within tolerance, done.")
         else:
@@ -184,7 +186,8 @@ def main() -> None:
         if mask:
             print(f"[mask] excluding {len(mask)}/{len(reference_scan)} rays "
                   f"({exclude_deg_range[0]:+.0f}deg to {exclude_deg_range[1]:+.0f}deg) -- non-static scene element")
-        realign_real(reference_scan, mask=mask)
+        heading_tol_deg = zone_coords.get("heading_tol_deg")
+        realign_real(reference_scan, mask=mask, tol_deg=heading_tol_deg)
 
 
 if __name__ == "__main__":

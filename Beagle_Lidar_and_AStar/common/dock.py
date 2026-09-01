@@ -4,6 +4,7 @@ import math
 import time
 
 from common.geometry import wrap_angle
+from common.mapping import DistanceField, localize_from_map
 from common.scan_align import best_rotation_offset, estimate_pose_offset, mask_from_angle_range
 
 REALIGN_TOL_DEG = 3.0
@@ -110,19 +111,33 @@ def _turn_to_heading(hw, reference_scan: list[float], target_heading_rad: float,
     return False
 
 
-def realign_heading(hw, reference_scan: list[float], mask: set[int] | None = None) -> tuple[bool, float]:
+def realign_heading(hw, reference_scan: list[float], mask: set[int] | None = None,
+                     tol_deg: float = REALIGN_TOL_DEG) -> tuple[bool, float]:
     """Rotate in place until the live scan's heading matches reference_scan's
-    within REALIGN_TOL_DEG. Heading-only; used standalone by
-    scripts/03_calibrate_and_realign.py. For heading+position together in one
-    pass, see find_pose() below. Returns (converged, match_err_m)."""
-    ok = _turn_to_heading(hw, reference_scan, 0.0, math.radians(REALIGN_TOL_DEG), mask=mask)
+    within `tol_deg` (REALIGN_TOL_DEG by default). Heading-only; used
+    standalone by scripts/03_calibrate_and_realign.py. For heading+position
+    together in one pass, see find_pose() below.
+
+    `tol_deg` is overridable per call because REALIGN_TOL_DEG=3deg isn't
+    always achievable: confirmed 2026-09-01 at the defect zone (match_err
+    stuck around 80-100mm even with exclude_deg_range masking, versus
+    receiving's clean ~40-50mm) -- current~ oscillated between roughly +10deg
+    and -10deg for the full MAX_TURN_STEPS without ever settling inside 3deg,
+    the same limit-cycle pattern find_pose()'s position-correction turn hit
+    against noisy match_err (see POSITION_TURN_TOL_DEG above). Pass a looser
+    `tol_deg` (see course_config.json's per-zone "heading_tol_deg") for a zone
+    where matching is inherently noisier instead of chasing precision the
+    measurement can't deliver there.
+
+    Returns (converged, match_err_m)."""
+    ok = _turn_to_heading(hw, reference_scan, 0.0, math.radians(tol_deg), mask=mask)
     scan = hw.scan()
     _, match_err = best_rotation_offset(scan, reference_scan, mask=mask)
     return ok, match_err
 
 
 def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
-              mask: set[int] | None = None) -> bool:
+              mask: set[int] | None = None, sanity_match_err_m: float = SANITY_MATCH_ERR_M) -> bool:
     """Closed loop that finds and fixes heading AND position together: every
     iteration takes exactly ONE fresh LiDAR scan, compares it to
     `reference_scan`, and moves accordingly -- nothing from a previous
@@ -146,7 +161,18 @@ def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
     function -- for a zone where part of the scene isn't static (e.g. a
     nearby robot arm that moves between visits), so matching relies only on
     geometry that's actually fixed. See course_config.json's per-zone
-    "exclude_deg_range"."""
+    "exclude_deg_range".
+
+    `sanity_match_err_m` gates both the coarse rot_match_err check below AND
+    the fine estimate_pose_offset() residual -- SANITY_MATCH_ERR_M (120mm) by
+    default, overridable per zone (course_config.json's "match_sanity_mm")
+    for a zone whose baseline match quality is persistently worse. Confirmed
+    2026-09-01 at defect: even a real, working partial correction (8.6cm
+    position error successfully driven down to 4.4cm) left residual stuck
+    around 150mm on every subsequent scan -- consistent across many repeated
+    stationary reads, so not just noise -- meaning the 120mm default rejected
+    a legitimately trustworthy, still-actionable estimate every iteration and
+    the loop could never finish the last cm of correction."""
     heading_tol_rad = math.radians(REALIGN_TOL_DEG)
     coarse_tol_rad = math.radians(COARSE_ROTATION_THRESHOLD_DEG)
 
@@ -176,7 +202,7 @@ def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
 
         # Heading is roughly aligned now -- only the FINE position estimate
         # below needs a good match (its linearization assumes small offsets).
-        if rot_match_err > SANITY_MATCH_ERR_M:
+        if rot_match_err > sanity_match_err_m:
             print(f"[pose {i}] heading aligned (match_err={rot_match_err * 1000:.0f}mm), but still too "
                   f"high to trust a position correction -- stopping before that; please physically "
                   f"place the robot closer to the zone and re-run for full convergence.")
@@ -198,7 +224,7 @@ def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
         # checked against anything, so a coincidentally-small fit with a bad
         # residual sailed through. Gate on residual too before trusting this
         # estimate for anything, including declaring done.
-        if residual > SANITY_MATCH_ERR_M:
+        if residual > sanity_match_err_m:
             print(f"  fit residual ({residual * 1000:.0f}mm) too high to trust this estimate -- "
                   "re-scanning instead of acting on it.")
             continue
@@ -240,4 +266,94 @@ def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
             print(f"  moved: heading-only turn {math.degrees(dtheta):+.1f}deg")
 
     print("[pose] max iterations reached without converging.")
+    return False
+
+
+# Search radius/resolution for find_pose_via_map() below -- wider and finer
+# than drive_with_localization()'s periodic in-transit checks
+# (LOCALIZE_SEARCH_RADIUS_M=0.05, theta_steps=90 in common/navigate.py),
+# which only need to catch small drift since the last correction. This is a
+# one-shot "where am I, really" check at a zone, so it can afford to search
+# wider (covers the 7-12cm errors seen in real find_pose() runs at defect)
+# and doesn't run often enough for the extra cost per call to matter the way
+# it would every drive tick.
+MAP_POSITION_SEARCH_RADIUS_M = 0.15
+MAP_THETA_STEPS = 90
+
+
+def find_pose_via_map(
+    hw, distance_field: DistanceField, target_x: float, target_y: float, target_heading_rad: float,
+    max_iters: int = 8, search_radius_m: float = MAP_POSITION_SEARCH_RADIUS_M, theta_steps: int = MAP_THETA_STEPS,
+    heading_tol_rad: float | None = None, position_tol_m: float = POSITION_TOL_M,
+) -> bool:
+    """Alternative to find_pose() for heading+position alignment, built around
+    common/mapping.py's localize_from_map() (wide-radius grid+360deg search
+    against the frozen point-cloud map) instead of common/scan_align.py's
+    estimate_pose_offset() (a fast linearized fit that only holds for small
+    offsets from an already-known pose).
+
+    Added 2026-09-01: find_pose() at the defect zone was observed to diverge,
+    not converge -- position_err went 7.8 -> 4.7 -> 4.4 -> 6.9 -> 12.1cm
+    across repeated correction attempts on real hardware, getting WORSE than
+    where it started. estimate_pose_offset()'s linear model degrades as the
+    true offset (position AND heading, which drifts a bit on every real
+    turn) grows, and defect's large, noisy corrections kept landing outside
+    where that linearization still holds. localize_from_map() carries no such
+    assumption -- it's the same tool that reliably tracked the robot through
+    ~40cm of continuous curved driving in drive_with_localization() -- so
+    this uses it for the final zone alignment too, at both heading and
+    position simultaneously from one search per iteration, no separate
+    coarse-heading-then-linear-position phases needed. `distance_field` is
+    the same frozen map (see scripts/08_build_map.py) drive_with_localization()
+    uses, not a single captured reference scan -- no `mask`/exclude_deg_range
+    needed either, since a non-static element like the OMX arm only
+    contaminates a few of the many map points, not the whole comparison.
+
+    Returns True if it converges within max_iters."""
+    if heading_tol_rad is None:
+        heading_tol_rad = math.radians(REALIGN_TOL_DEG)
+    guess_x, guess_y = target_x, target_y
+    for i in range(max_iters):
+        time.sleep(SETTLE_S)
+        scan = hw.scan()
+        localized, match_err = localize_from_map(
+            scan, distance_field, guess_x, guess_y,
+            pos_search_radius_m=search_radius_m, theta_steps=theta_steps,
+        )
+        dtheta = wrap_angle(target_heading_rad - localized.theta)
+        dx = target_x - localized.x
+        dy = target_y - localized.y
+        pos_err_m = math.hypot(dx, dy)
+        print(f"[pose-map {i}] pos=({localized.x:.3f},{localized.y:.3f}) "
+              f"heading={math.degrees(localized.theta):.1f}deg match_err={match_err * 1000:.0f}mm "
+              f"heading_err={math.degrees(dtheta):+.1f}deg position_err={pos_err_m * 100:.1f}cm")
+
+        if abs(dtheta) <= heading_tol_rad and pos_err_m <= position_tol_m:
+            print("[pose-map] heading and position both within tolerance, done.")
+            return True
+
+        if pos_err_m > position_tol_m:
+            # World-frame direction from the robot's actual (localized)
+            # position to the target -- facing it and driving forward reaches
+            # the target, but so does facing away and driving backward; pick
+            # whichever needs the smaller turn (every turn adds real
+            # positional drift on real hardware), same reasoning as find_pose().
+            correction_heading = math.atan2(dy, dx)
+            forward_needed = wrap_angle(correction_heading - localized.theta)
+            backward_needed = wrap_angle(correction_heading + math.pi - localized.theta)
+            drive_backward = abs(backward_needed) < abs(forward_needed)
+            needed = backward_needed if drive_backward else forward_needed
+            hw.turn_by_angle(needed, turn_percent=REALIGN_TURN_PERCENT)
+            if drive_backward:
+                driven = hw.drive_backward(pos_err_m, backward_percent=POSITION_DRIVE_PERCENT)
+            else:
+                driven = hw.drive_forward(pos_err_m, forward_percent=POSITION_DRIVE_PERCENT)
+            print(f"  drove {driven * 100:.1f}cm toward target (pose re-checked next scan)")
+            guess_x, guess_y = target_x, target_y  # expect to be near the target now
+        else:
+            hw.turn_by_angle(dtheta, turn_percent=REALIGN_TURN_PERCENT)
+            print(f"  heading-only turn {math.degrees(dtheta):+.1f}deg")
+            guess_x, guess_y = localized.x, localized.y  # position unchanged by a pure turn
+
+    print("[pose-map] max iterations reached without converging.")
     return False
