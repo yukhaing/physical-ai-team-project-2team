@@ -11,9 +11,9 @@ from common.scan_align import best_rotation_offset, estimate_pose_offset, mask_f
 # (1deg/step, well finer than 3deg) below, find_pose_via_map() still showed
 # some oscillation on real hardware chasing exactly 3deg -- turn_by_angle()
 # isn't a perfectly precise physical pivot, so the live heading reading
-# itself has some real jitter beyond pure grid quantization. 5deg gives that
-# jitter room to land inside tolerance without another correction cycle.
-REALIGN_TOL_DEG = 5.0
+# itself has some real jitter beyond pure grid quantization. Raised to 6.0
+# for more margin against that same jitter.
+REALIGN_TOL_DEG = 6.0
 REALIGN_MAX_ITERS = 30
 REALIGN_TURN_PERCENT = 10.0
 # Rough estimate only (wheel_percent -> deg/s) -- exact rate doesn't matter much
@@ -70,15 +70,34 @@ POSITION_TURN_MAX_STEPS = 6
 # means fewer correction cycles -- and fewer turns -- rather than chasing a
 # precision this mechanism can't reliably deliver.
 #
-# Tightened back to 0.02 (2026-09-01) now that find_pose_via_map() is the
-# default alignment (see common/navigate.py's goto_zone()) instead of the
-# find_pose() this was originally loosened for: find_pose_via_map() measures
-# heading AND position jointly from the same wide-radius map search every
-# iteration (match_err ~5-10mm in working real-hardware runs), not a
-# linearized single-scan fit, so it isn't the same "turning to chase noise"
-# failure mode -- there was still a bit of visible position error left at
-# 3cm worth tightening up now that the mechanism can actually deliver it.
-POSITION_TOL_M = 0.02
+# Tightened to 0.02 (2026-09-01) now that find_pose_via_map() is the default
+# alignment (see common/navigate.py's goto_zone()) instead of the find_pose()
+# this was originally loosened for: find_pose_via_map() measures heading AND
+# position jointly from the same wide-radius map search every iteration
+# (match_err ~5-10mm in working real-hardware runs), not a linearized
+# single-scan fit, so it isn't the same "turning to chase noise" failure
+# mode. But 0.02 turned out too tight for a DIFFERENT reason, still real:
+# find_pose_via_map()'s position-correction turn re-orients toward whatever
+# ARBITRARY heading the correction needs, ignoring target heading entirely
+# (see the branch below) -- confirmed 2026-09-01, a GOTO_RECEIVING run
+# oscillated through all 8 iterations without ever landing position AND
+# heading within tolerance at the same time, even though each individual
+# match_err stayed a trustworthy 8-14mm throughout (i.e. genuinely an
+# execution-precision problem, not a measurement one -- each turn-then-drive
+# to fix position knocks heading off, then fixing heading knocks position
+# off again). Backed off to 0.025 as a middle ground between that and the
+# original 0.03 -- still real precision, less prone to this back-and-forth.
+#
+# Tightened again to 0.015 (2026-09-01): a converged run left a visible
+# residual (pos=(0.330,0.340) vs target (0.35,0.34) -- 2.0cm, all of it along
+# the heading-0deg/3-o'clock axis, none lateral). A residual that's purely
+# along the target heading needs close to ZERO turn to correct (the
+# correction_heading below comes out near the current heading already), so
+# it doesn't carry the same oscillation risk the 0.02 case above did (that
+# one needed a real reorientation). If oscillation reappears on a
+# non-axis-aligned residual, back off toward 0.02-0.025 again rather than
+# assuming this case generalizes.
+POSITION_TOL_M = 0.015
 POSITION_DRIVE_PERCENT = 10.0
 
 # estimate_pose_offset()'s linearization only holds for small rotation (roughly
