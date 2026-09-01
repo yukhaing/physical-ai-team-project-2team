@@ -93,16 +93,18 @@ class ConsoleNode(Node):
             raw = payload.get('raw') if isinstance(payload.get('raw'), dict) else {}
             labels = {
                 'adapter_ready': '상태 수신 대기',
+                'status_link_connected': '상태 확인 중',
                 'connected': '연결됨',
                 'disconnected': '연결 끊김',
-                'idle': '대기 중',
+                'idle': '연결됨',
                 'moving_to_defect': '이동중 · 불량 구역',
                 'defect_arrived': '도착 · 불량 구역',
                 'returning': '이동/정렬중 · 수령 구역',
                 'signal_sent': '적재 신호 전송',
                 'waiting_for_beagle': '연결 대기 중',
-                'connecting': '연결 재시도',
-                'reconnecting': '재연결 중',
+                'connecting': '연결 중',
+                'reconnecting': '연결 중',
+                'stopped': '비상정지',
                 'failed': '오류',
                 'stop_unsupported': '원격 정지 미지원',
             }
@@ -190,7 +192,7 @@ class ConsoleWindow(QWidget):
         layout = QHBoxLayout(self)
         layout.addWidget(self.video, 3)
         layout.addLayout(side, 1)
-        self.run_button.clicked.connect(lambda: self.node.command('enable'))
+        self.run_button.clicked.connect(self.enable_system)
         self.stop_button.clicked.connect(lambda: self.node.command('stop'))
         self.estop_button.clicked.connect(lambda: self.node.command('estop'))
         self.operator_unloaded_button.clicked.connect(self.complete_unload)
@@ -200,11 +202,31 @@ class ConsoleWindow(QWidget):
         self.node.signals.beagle_status_ready.connect(self.update_beagle_status)
         self.node.signals.log_ready.connect(self.add_log)
 
+    def set_run_active(self, active):
+        self.run_button.setStyleSheet(
+            'background:#2E7D32;color:white;font-weight:bold;min-height:32px;'
+            if active else '')
+
+    def enable_system(self):
+        # Give immediate feedback; the status callback clears the highlight if
+        # the orchestrator rejects enable because reset/E-stop is still active.
+        self.set_run_active(True)
+        self.node.command('enable')
+
     def update_operation_status(self, text):
         self.status.setText(text)
-        if text.startswith('BEAGLE_DEFECT_ARRIVED:'):
+        if text.startswith(('DISABLED:', 'RESET', 'LOCKED:', 'PARKING:',
+                            'STOPPED:', 'SOFTWARE_EMERGENCY_STOP:',
+                            'ENABLE_IGNORED:')):
+            self.set_run_active(False)
+        elif text.startswith(('READY:', 'WAIT_BEAGLE:')):
+            self.set_run_active(True)
+        if (text.startswith('BEAGLE_DEFECT_ARRIVED:') or
+                text.startswith('UNLOAD_OMX_FAILED:')):
             self.operator_unloaded_button.setEnabled(True)
-        elif text.startswith(('UNLOAD_COMPLETE:', 'UNLOAD_SIGNAL_SENT:',
+        elif text.startswith(('UNLOAD_OMX_STARTING:', 'UNLOAD_OMX_ACTIVE:',
+                              'UNLOAD_OMX_COMPLETE:', 'UNLOAD_COMPLETE:',
+                              'UNLOAD_SIGNAL_SENT:',
                               'READY:', 'DISABLED:',
                               'RESET', 'RECOVERING:', 'BEAGLE_HOME:')):
             self.operator_unloaded_button.setEnabled(False)
@@ -220,8 +242,9 @@ class ConsoleWindow(QWidget):
             'moving_to_defect': '#F5A623',
             'returning': '#F5A623',
             'defect_arrived': '#3B9C4C',
-            'idle': '#888888',
+            'idle': '#2C74F5',
             'disconnected': '#B00020',
+            'connecting': '#2C74F5',
             'reconnecting': '#2C74F5',
             'failed': '#B00020',
             'stop_unsupported': '#B00020',

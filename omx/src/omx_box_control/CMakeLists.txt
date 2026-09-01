@@ -54,6 +54,7 @@ install(PROGRAMS
   scripts/sorting_orchestrator_node.py
   scripts/operations_log_node.py
   scripts/omx_console.py
+  scripts/unload_coordinator_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})

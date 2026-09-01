@@ -20,7 +20,7 @@ def generate_launch_description():
     config = lambda name: PathJoinSubstitution([share, 'config', name])
     real = {'dry_run': ParameterValue(False, value_type=bool)}
     grasped = dict(
-        real, min_grasp_position=ParameterValue(0.15, value_type=float))
+        real, min_grasp_position=ParameterValue(0.005, value_type=float))
     # A single selected pick target is intentionally retained for the full pick
     # side of the cycle. The coordinator itself requires it to be fresh at start.
     retained_target = dict(real, target_max_age=ParameterValue(300.0, value_type=float))

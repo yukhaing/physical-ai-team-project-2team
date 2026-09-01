@@ -5,12 +5,12 @@ yolo_detection:
     detections_topic: /console/detections
     selection_topic: /console/selected_box
     pixel_selection_topic: /console/select_pixel
-    model_path: /root/omx_box_project_ws/integration/omx_box_system/models/box_defect_best.pt
+    model_path: /root/omx_box_project_ws/omx/models/best.pt
     confidence_threshold: 0.50
     device: cpu
     auto_select_defect: true
     auto_select_min_interval_sec: 8.0
-    angle_calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/active.yaml
+    angle_calibration_file: /root/omx_box_project_ws/runtime/calibration/active.yaml
     angle_min_contour_area: 1000.0
     joint5_offset_deg: 2.00255
     joint5_sample_count: 4
@@ -30,10 +30,16 @@ beagle_adapter:
     status_port: 9000
     connect_timeout: 2.0
     retry_interval: 2.0
-    local_python: /root/omx_box_project_ws/integration/yeongjin_gui/Beagle_mobile_robot/.venv/bin/python
-    local_mission: "/root/omx_box_project_ws/integration/yeongjin_gui/Beagle_mobile_robot/missions/receiving_defect_shuttle copy.py"
-    local_output: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/beagle_shuttle.csv
-    local_process_log: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/beagle_reconnect.log
+    # TCP 접속만으로는 실제 Beagle 연결로 표시하지 않는다. 미션 heartbeat가
+    # 이 시간 동안 끊기면 GUI와 오케스트레이터는 연결 끊김으로 전환한다.
+    status_heartbeat_timeout: 3.0
+    # Safety default: do not let roboid auto-probe OMX's serial port when a
+    # physical Beagle is absent. Enable only with a dedicated Beagle device.
+    launch_local_mission: false
+    local_python: /root/omx_box_project_ws/Beagle_mobile_robot/.venv/bin/python
+    local_mission: /root/omx_box_project_ws/Beagle_Lidar_and_AStar/scripts/10_shuttle_mission.py
+    local_output: /root/omx_box_project_ws/runtime/logs/beagle_shuttle.csv
+    local_process_log: /root/omx_box_project_ws/runtime/logs/beagle_reconnect.log
 
 sorting_orchestrator:
   ros__parameters:
@@ -44,7 +50,12 @@ sorting_orchestrator:
     auto_continue_pick: true
     # Wait at the defect zone until the operator presses the GUI 하역 완료 button.
     auto_complete_unload: false
+    # Enable only after the second OMX pose is dry-run checked and dry_run=false.
+    automatic_unload_omx: false
+    unload_omx_status_topic: /unload_omx/unload_coordinator/status
     continuous_operation: true
+    # While Beagle returns after 하역 완료, retain the latest stable defect and
+    # start OMX's next pick. Final placement remains gated by Beagle idle.
     # Use the GUI detector because it carries pixel coordinates and joint5.
     # The legacy /yolo/selected_box Float64 bridge lacks both and races it.
     accept_external_yolo: false
@@ -56,10 +67,24 @@ sorting_orchestrator:
     home_positions: [0.0, -1.57, 1.57, 1.57, 0.0]
     home_move_duration: 5.0
     home_minimum_completion_time: 5.0
-    home_joint_tolerance: 0.08
+    home_joint_tolerance: 0.15
     home_settle_time: 0.20
     home_timeout: 12.0
+    # Retry one near-HOME timeout before deciding reset cannot release the box.
+    reset_home_retry_limit: 1
+    # If E-stop interrupted Beagle placement, reset first retracts to the
+    # measured high place approach (about 192.5mm), then returns to folded HOME.
+    # It opens and closes the gripper only after HOME so a retained box is
+    # released without sweeping through the Beagle loading box. Hold the full
+    # opening long enough for the released box to fall clear before closing.
+    reset_gripper_open_position: 0.98
+    reset_gripper_closed_position: 0.0
+    reset_gripper_effort: 10.0
+    reset_gripper_min_open_position: 0.90
+    reset_gripper_max_closed_position: 0.05
+    reset_gripper_open_dwell: 2.0
+    reset_gripper_timeout: 4.0
 
 operations_log:
   ros__parameters:
-    database_path: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/operations.sqlite3
+    database_path: /root/omx_box_project_ws/runtime/logs/operations.sqlite3

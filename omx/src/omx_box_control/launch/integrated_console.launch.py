@@ -36,9 +36,21 @@ def generate_launch_description():
                  'status_port': ParameterValue(
                      EnvironmentVariable('BEAGLE_STATUS_PORT', default_value='9000'),
                      value_type=int),
+                 'launch_local_mission': ParameterValue(
+                     EnvironmentVariable(
+                         'BEAGLE_LOCAL_MISSION_LAUNCH', default_value='false'),
+                     value_type=bool),
+                 'local_port_name': ParameterValue(
+                     EnvironmentVariable('BEAGLE_LOCAL_PORT_NAME', default_value=''),
+                     value_type=str),
              }]),
         Node(package='omx_box_control', executable='sorting_orchestrator_node.py',
-             name='sorting_orchestrator', output='screen', parameters=[config]),
+             name='sorting_orchestrator', output='screen', parameters=[config, {
+                 'automatic_unload_omx': ParameterValue(
+                     EnvironmentVariable(
+                         'AUTOMATIC_UNLOAD_OMX', default_value='false'),
+                     value_type=bool),
+             }]),
         Node(package='omx_box_control', executable='operations_log_node.py',
              name='operations_log', output='screen', parameters=[config]),
         Node(package='omx_box_control', executable='omx_console.py',

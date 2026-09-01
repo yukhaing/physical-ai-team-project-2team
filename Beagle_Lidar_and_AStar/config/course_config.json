@@ -1,0 +1,16 @@
+{
+  "_note": "All x_m/y_m are measured from the room's bottom-left wall corner (0,0), matching rectangle_segments(0, 0, boundary.x_m, boundary.y_m). OMX reference point intentionally omitted for now -- Step 1 only checks go-to-zone position/heading, no OMX-relative disambiguation yet.",
+  "boundary": {
+    "x_m": 0.86,
+    "y_m": 0.70
+  },
+  "zones": {
+    "receiving": {"x_m": 0.35, "y_m": 0.34, "heading_deg": 0.0},
+    "defect": {"x_m": 0.73, "y_m": 0.135, "heading_deg": 180.0,
+               "exclude_deg_range": [-140, -40], "heading_tol_deg": 10.0, "match_sanity_mm": 180}
+  },
+  "_exclude_deg_range_note": "Optional per-zone [start_deg, end_deg] window (0deg = the direction the zone's reference scan was captured facing, +ve = counter-clockwise -- see common/scan_align.py's mask_from_angle_range()) excluded from scan matching at that zone. defect's OMX arm sits roughly -90deg (robot's right, facing 9 o'clock) from the robot and doesn't hold a fixed position between visits, so a wide margin around it is masked out -- matching relies only on the room's static wall geometry there. Widen/narrow/re-aim this if find_pose() at defect still shows elevated match_err, or re-derive it if the arm's physical placement changes.",
+  "_heading_tol_deg_note": "Optional per-zone override for common/dock.py's REALIGN_TOL_DEG (default 3deg) used by goto_zone()'s heading-only realign_heading() stage. Raised to 10deg for defect (2026-09-01): even with exclude_deg_range masking, match_err there stays around 80-100mm (vs receiving's clean ~40-50mm), and chasing 3deg against that noise floor caused current~ to oscillate between roughly +10/-10deg for the full turn-step budget without ever settling. 10deg reliably exits that loop; tighten it if defect's match quality improves (e.g. once the OMX arm's positioning is more consistent).",
+  "_match_sanity_mm_note": "Optional per-zone override (millimeters) for common/dock.py's SANITY_MATCH_ERR_M (default 120mm), used by find_pose()'s align=True path to decide whether to trust a position/heading estimate at all. Raised to 180 for defect (2026-09-01): a real, working partial correction there (8.6cm position error successfully driven down to 4.4cm) left the fit's residual stuck around 150mm on every subsequent scan -- confirmed not noise (many repeated stationary reads agreed closely) -- so the 120mm default was rejecting a legitimately trustworthy, still-actionable estimate every iteration and blocking the last bit of correction. Only used by align=True (find_pose()); realign_heading() (align_heading) doesn't use this gate."
+}
+

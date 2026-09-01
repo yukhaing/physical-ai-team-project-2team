@@ -71,6 +71,9 @@ class YoloDetectionNode(Node):
         matrix = storage.getNode('homography').mat() if storage.isOpened() else None
         image = storage.getNode('image_points').mat() if storage.isOpened() else None
         reference = storage.getNode('reference_points_link0').mat() if storage.isOpened() else None
+        polynomial = storage.getNode('polynomial_coefficients').mat() if storage.isOpened() else None
+        normalization = storage.getNode('pixel_normalization').mat() if storage.isOpened() else None
+        coordinate_model = storage.getNode('coordinate_model').string() if storage.isOpened() else ''
         storage.release()
         if matrix is None or matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
             raise RuntimeError(f'Invalid angle homography: {path}')
@@ -80,11 +83,44 @@ class YoloDetectionNode(Node):
         reference = reference.reshape((-1, 2)).astype(float)
         projected = cv2.perspectiveTransform(
             pixels.reshape((-1, 1, 2)), matrix).reshape((-1, 2))
-        self.get_logger().info(f'Loaded joint5 angle calibration from {path}')
+        self.polynomial_coefficients = None
+        self.pixel_normalization = None
+        self.piecewise_triangulation = None
+        self.piecewise_coefficients = None
+        if coordinate_model == 'piecewise_affine_v1':
+            from scipy.spatial import Delaunay
+            self.piecewise_triangulation = Delaunay(pixels)
+            self.piecewise_coefficients = [
+                np.linalg.solve(
+                    np.column_stack((np.ones(3), pixels[vertices])),
+                    reference[vertices])
+                for vertices in self.piecewise_triangulation.simplices]
+            model = coordinate_model
+        elif (polynomial is not None and polynomial.shape == (6, 2) and
+                normalization is not None and normalization.size == 4 and
+                np.all(np.isfinite(polynomial)) and np.all(np.isfinite(normalization))):
+            self.polynomial_coefficients = polynomial.astype(float)
+            self.pixel_normalization = normalization.reshape(4).astype(float)
+            model = 'quadratic_v1'
+        else:
+            model = 'homography_residual_fallback'
+        self.get_logger().info(
+            f'Loaded joint5 angle calibration from {path}; model={model}')
         return matrix, pixels, reference - projected
 
     def world(self, point):
         pixel = np.asarray(point, dtype=float)
+        if self.piecewise_triangulation is not None:
+            simplex = int(self.piecewise_triangulation.find_simplex(pixel))
+            if simplex < 0:
+                return np.asarray([float('nan'), float('nan')])
+            return np.asarray([1.0, pixel[0], pixel[1]]) @ \
+                self.piecewise_coefficients[simplex]
+        if self.polynomial_coefficients is not None:
+            cx, cy, sx, sy = self.pixel_normalization
+            u, v = (pixel[0] - cx) / sx, (pixel[1] - cy) / sy
+            features = np.asarray([1.0, u, v, u * u, u * v, v * v])
+            return features @ self.polynomial_coefficients
         transformed = self.homography @ np.array([pixel[0], pixel[1], 1.0])
         raw = transformed[:2] / transformed[2]
         distance = np.linalg.norm(self.calibration_pixels - pixel, axis=1)
@@ -239,9 +275,14 @@ class YoloDetectionNode(Node):
     def auto_select_defect(self, detections):
         if not bool(self.get_parameter('auto_select_defect').value):
             return
+        # During the previous delivery's return leg the orchestrator retains
+        # exactly one candidate and replaces it with the latest stable defect.
+        # This lets it begin the next pick as soon as `returning` arrives.
         if not (
                 self.console_status.startswith('READY:') or
-                self.console_status.startswith('BEAGLE_HOME:')):
+                self.console_status.startswith('BEAGLE_HOME:') or
+                self.console_status.startswith('UNLOAD_SIGNAL_SENT:') or
+                self.console_status.startswith('BEAGLE_RETURNING')):
             return
         defects = [d for d in detections if d.get('class') == 'defect' and
                    d.get('joint5_stable')]

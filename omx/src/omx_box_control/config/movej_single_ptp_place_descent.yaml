@@ -54,7 +54,7 @@ movej_single_ptp_place_descent:
 
     gripper_joint_name: gripper_joint_1
     gripper_gate_mode: grasp
-    min_grasp_position: 0.15
+    min_grasp_position: 0.005
     max_grasp_position: 0.70
 
     # Use the validated responsive PTP request; controller dynamic limits remain active.

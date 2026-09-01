@@ -33,8 +33,8 @@ pick_coordinator:
     open_watchdog_position_epsilon: 0.003
     # Empty staging close should reach near the fully closed command.
     maximum_staging_closed_position: 0.05
-    # Validated successful grasps are 0.293-0.425rad; empty close was 0.028rad.
-    min_grasp_position: 0.15
+    # Current thin-box grasp was confirmed at 0.0092rad; recent empty closes were <=0.0015rad.
+    min_grasp_position: 0.005
     max_grasp_position: 0.70
     # ID16 can report a nonzero velocity forever after physical box contact.
     # Accept a position-stable grasp and cancel that non-terminating action.
@@ -46,6 +46,9 @@ pick_coordinator:
     empty_close_watchdog_stable_time: 0.30
     # Retain one human gate before moving a loaded box.
     require_grasp_confirmation: true
+    # The GUI orchestrator calls /pick_coordinator/release_place only after
+    # Beagle reports idle at the receiving position.
+    require_beagle_place_release: true
     place_correction_trigger_z: 0.100
     # Taught from measured /joint_states on 2026-08-20.
     remembered_place_xyz: [-0.02653, -0.17494, 0.19253]
@@ -60,3 +63,7 @@ pick_coordinator:
     # Match the revised higher loaded-lift completion band.
     recover_lift_min_z: 0.165
     recover_lift_max_z: 0.195
+    # An interrupted Beagle place may use the high-place reset retract only
+    # while its measured TCP remains inside this known place corridor.
+    reset_place_retract_min_z: 0.110
+    reset_place_retract_max_z: 0.220

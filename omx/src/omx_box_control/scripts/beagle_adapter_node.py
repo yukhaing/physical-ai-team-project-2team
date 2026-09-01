@@ -29,6 +29,11 @@ class BeagleAdapter(Node):
         self.declare_parameter('status_port', 9000)
         self.declare_parameter('connect_timeout', 2.0)
         self.declare_parameter('retry_interval', 2.0)
+        self.declare_parameter('status_heartbeat_timeout', 3.0)
+        # Starting the local mission makes roboid auto-probe serial devices.
+        # Keep this opt-in because it can otherwise open OMX's /dev/ttyACM0.
+        self.declare_parameter('launch_local_mission', False)
+        self.declare_parameter('local_port_name', '')
         self.declare_parameter(
             'local_python',
             '/root/omx_box_project_ws/integration/yeongjin_gui/Beagle_mobile_robot/.venv/bin/python')
@@ -60,6 +65,11 @@ class BeagleAdapter(Node):
         self._last_retry_report = 0.0
         self._status_client_count = 0
         self._status_client_lock = threading.Lock()
+        self._mission_status_seen = False
+        self._mission_connection_live = False
+        self._mission_hardware_connected = False
+        self._reconnect_requested = False
+        self._last_mission_status_time = None
         self._reconnect_lock = threading.Lock()
         self._local_process = None
         self._local_process_log = None
@@ -75,9 +85,10 @@ class BeagleAdapter(Node):
         sender.start()
         self._threads.append(sender)
         self.create_timer(0.05, self._drain_events)
+        self.create_timer(0.5, self._check_status_heartbeat)
         self.publish_status(
-            'adapter_ready', None,
-            f'listening for Beagle status on '
+            'disconnected', None,
+            f'waiting for Beagle mission status on '
             f'{self.get_parameter("status_bind_host").value}:'
             f'{self.get_parameter("status_port").value}')
 
@@ -127,9 +138,12 @@ class BeagleAdapter(Node):
             with self._status_client_lock:
                 self._status_client_count += 1
             self._discovered_trigger_host = address[0]
+            # A TCP connection is only a status-channel handshake.  The
+            # mission opens this socket before it initializes the physical
+            # Beagle, so it must not be presented as a robot connection.
             self._queue_event('transport', {
-                'state': 'connected',
-                'detail': f'Beagle status connected from {address[0]}:{address[1]}',
+                'state': 'status_link_connected',
+                'detail': f'waiting for Beagle mission heartbeat from {address[0]}:{address[1]}',
             })
             thread = threading.Thread(
                 target=self._status_client_loop,
@@ -170,6 +184,10 @@ class BeagleAdapter(Node):
                 self._status_client_count = max(0, self._status_client_count - 1)
                 disconnected = self._status_client_count == 0
             if disconnected:
+                self._mission_connection_live = False
+                self._mission_hardware_connected = False
+                self._mission_status_seen = False
+                self._last_mission_status_time = None
                 self._queue_event('transport', {
                     'state': 'disconnected',
                     'detail': f'Beagle status disconnected from {address[0]}',
@@ -251,9 +269,27 @@ class BeagleAdapter(Node):
             return
         job_id = command.get('job_id')
         if name == 'reconnect':
+            self._reconnect_requested = True
+            if self._mission_connection_live:
+                try:
+                    self._outbound.put_nowait({'event': 'reset', 'job_id': job_id})
+                except queue.Full:
+                    self.publish_status(
+                        'failed', job_id, 'Beagle reset queue is full')
+                    return
+                self.publish_status(
+                    'connecting', job_id,
+                    'reset queued for Beagle TriggerServer')
+                return
             self._request_reconnect(job_id)
             return
         if name in ('box_placed', 'home'):
+            if (not self._mission_connection_live or
+                    not self._mission_hardware_connected):
+                self.publish_status(
+                    'disconnected', job_id,
+                    'box_placed blocked: physical Beagle is not connected')
+                return
             if job_id in self._queued_jobs:
                 return
             self._active_job_id = job_id
@@ -274,6 +310,12 @@ class BeagleAdapter(Node):
                 'box_placed queued for Beagle TriggerServer')
             return
         if name == 'operator_unloaded':
+            if (not self._mission_connection_live or
+                    not self._mission_hardware_connected):
+                self.publish_status(
+                    'disconnected', job_id,
+                    'operator_unloaded blocked: physical Beagle is not connected')
+                return
             if job_id in self._queued_jobs:
                 return
             self._queued_jobs.add(job_id)
@@ -296,20 +338,32 @@ class BeagleAdapter(Node):
                 'ready', job_id,
                 'post-place shuttle mode: Beagle remains at receiving zone')
             return
-        if name == 'stop':
-            self.get_logger().warning(
-                'Beagle mission does not implement remote stop; no TCP stop was sent')
+        if name == "stop":
+            payload = {"event": "emergency_stop"}
+            if job_id is not None:
+                payload["job_id"] = job_id
+            try:
+                self._outbound.put_nowait(payload)
+            except queue.Full:
+                self.publish_status(
+                    "failed", job_id, "Beagle emergency-stop queue is full")
+                return
             self.publish_status(
-                'stop_unsupported', job_id,
-                'use the Beagle hardware stop or stop its mission process')
+                "stopping", job_id,
+                "emergency_stop queued for Beagle TriggerServer")
             return
         self.publish_status('failed', job_id, f'unsupported command: {name}')
 
     def _request_reconnect(self, job_id):
         if self._connection_mode() != 'local':
             self.publish_status(
-                'reconnecting', job_id,
+                'connecting', job_id,
                 'Waiting for the remote Beagle mission to reconnect')
+            return
+        if not bool(self.get_parameter('launch_local_mission').value):
+            self.publish_status(
+                'disconnected', job_id,
+                'local Beagle mission launch is disabled; connect Beagle first')
             return
         thread = threading.Thread(
             target=self._restart_local_mission,
@@ -320,23 +374,24 @@ class BeagleAdapter(Node):
     def _restart_local_mission(self, job_id):
         if not self._reconnect_lock.acquire(blocking=False):
             self.publish_status(
-                'reconnecting', job_id,
+                'connecting', job_id,
                 'Local Beagle reconnect is already in progress')
             return
         try:
             if self._local_process is not None and self._local_process.poll() is None:
                 self.publish_status(
-                    'reconnecting', job_id,
+                    'connecting', job_id,
                     'Local Beagle mission is already running; waiting for status')
                 return
             if self._trigger_server_available():
                 self.publish_status(
-                    'reconnecting', job_id,
+                    'connecting', job_id,
                     'Beagle TriggerServer is already running; waiting for status')
                 return
 
             python = Path(str(self.get_parameter('local_python').value))
             mission = Path(str(self.get_parameter('local_mission').value))
+            port_name = Path(str(self.get_parameter('local_port_name').value))
             output = Path(str(self.get_parameter('local_output').value))
             process_log = Path(str(self.get_parameter('local_process_log').value))
             if not python.is_file() or not os.access(python, os.X_OK):
@@ -347,6 +402,10 @@ class BeagleAdapter(Node):
                 self.publish_status(
                     'failed', job_id, f'Local Beagle mission is unavailable: {mission}')
                 return
+            if not port_name.exists() or 'Robomation_EXPRESS_RECEIVER' not in port_name.name:
+                self.publish_status(
+                    'failed', job_id, f'Dedicated Beagle receiver is unavailable: {port_name}')
+                return
 
             output.parent.mkdir(parents=True, exist_ok=True)
             process_log.parent.mkdir(parents=True, exist_ok=True)
@@ -355,6 +414,7 @@ class BeagleAdapter(Node):
             self._local_process_log = process_log.open('a', encoding='utf-8')
             command = [
                 str(python), str(mission),
+                '--port-name', str(port_name),
                 '--trigger-port', str(int(self.get_parameter('trigger_port').value)),
                 '--status-host', '127.0.0.1',
                 '--status-port', str(int(self.get_parameter('status_port').value)),
@@ -368,7 +428,7 @@ class BeagleAdapter(Node):
                 start_new_session=True,
             )
             self.publish_status(
-                'reconnecting', job_id,
+                'connecting', job_id,
                 f'Local Beagle mission restarted (pid={self._local_process.pid})')
         except (OSError, ValueError) as error:
             self.publish_status(
@@ -396,9 +456,14 @@ class BeagleAdapter(Node):
                 self._publish_mission_status(payload)
             elif kind == 'command_sent':
                 event = payload.get('command', {}).get('event', 'command')
-                self.publish_status(
-                    'signal_sent', payload.get('job_id'),
-                    f'{event} sent to {payload["host"]}:{payload["port"]}')
+                if event == 'reset':
+                    self.publish_status(
+                        'connecting', payload.get('job_id'),
+                        f'reset sent to {payload["host"]}:{payload["port"]}')
+                else:
+                    self.publish_status(
+                        'signal_sent', payload.get('job_id'),
+                        f'{event} sent to {payload["host"]}:{payload["port"]}')
             elif kind == 'transport':
                 self.publish_status(
                     payload['state'], payload.get('job_id', self._active_job_id),
@@ -407,11 +472,27 @@ class BeagleAdapter(Node):
                 self.get_logger().warning(f'Beagle status protocol error: {payload}')
 
     def _publish_mission_status(self, payload):
+        self._mission_status_seen = True
+        self._mission_connection_live = True
+        self._last_mission_status_time = time.monotonic()
+        hardware = payload.get('hardware_connected')
+        # New missions report the physical Roboid connector explicitly.  Keep
+        # remote compatibility with older missions that do not include it.
+        self._mission_hardware_connected = (
+            bool(hardware) if hardware is not None else True)
         text = str(payload.get('status', '')).strip()
         destination = str(payload.get('to', '')).strip()
         location = str(payload.get('at', '')).strip()
         mission_state = str(payload.get('mission_state', '')).strip()
-        if text == '대기' or mission_state == 'WAIT_SIGNAL':
+        if not self._mission_hardware_connected:
+            state = 'connecting' if self._reconnect_requested else 'disconnected'
+        elif self._reconnect_requested and mission_state == 'EMERGENCY_STOP':
+            # A stale stopped heartbeat can arrive after reset was queued.
+            # Keep showing the requested transition until WAIT_SIGNAL confirms
+            # that the Beagle emergency latch has actually cleared.
+            state = 'connecting'
+        elif text == '대기' or mission_state == 'WAIT_SIGNAL':
+            self._reconnect_requested = False
             state = 'idle'
         elif (text == 'defect 존으로 이동중' or
               (text == '출발' and destination == 'defect_zone') or
@@ -424,6 +505,8 @@ class BeagleAdapter(Node):
               (text == '출발' and destination == 'receiving_zone') or
               mission_state in ('GOTO_RECEIVING', 'ALIGN_RECEIVING')):
             state = 'returning'
+        elif text == '비상정지' or mission_state == 'EMERGENCY_STOP':
+            state = 'stopped'
         elif text == 'SENSOR_FAIL' or mission_state == 'SENSOR_FAIL':
             state = 'failed'
         elif text == '도착' and location == 'receiving_zone':
@@ -437,6 +520,19 @@ class BeagleAdapter(Node):
         elif state == 'idle' and self._mission_in_motion:
             self._mission_in_motion = False
             self._active_job_id = None
+
+    def _check_status_heartbeat(self):
+        """Do not retain a stale connection after the Beagle mission stops."""
+        if not self._mission_connection_live or self._last_mission_status_time is None:
+            return
+        elapsed = time.monotonic() - self._last_mission_status_time
+        if elapsed <= float(self.get_parameter('status_heartbeat_timeout').value):
+            return
+        self._mission_connection_live = False
+        self._mission_hardware_connected = False
+        self.publish_status(
+            'disconnected', self._active_job_id,
+            f'Beagle mission heartbeat timed out after {elapsed:.1f}s')
 
     def close(self):
         self._stop.set()

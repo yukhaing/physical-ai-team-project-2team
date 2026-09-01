@@ -13,7 +13,7 @@ movej_place_rotate:
     fk_position_bias: [0.00126, 0.0, 0.00055]
     target_max_age: 30.0
     gripper_joint_name: gripper_joint_1
-    min_grasp_position: 0.15
+    min_grasp_position: 0.005
     max_grasp_position: 0.70
     max_gripper_change: 0.05
     base_xy: [-0.00999, 0.0]

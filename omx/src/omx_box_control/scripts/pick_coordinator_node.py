@@ -33,12 +33,15 @@ class PickCoordinator(Node):
     WAIT_GRASP_CONFIRM = 'WAIT_GRASP_CONFIRM'
     WAIT_LIFT = 'WAIT_LOADED_LIFT'
     WAIT_PLACE_XY_TRANSFER = 'WAIT_PLACE_HIGH_XY_TRANSFER'
+    WAIT_BEAGLE_ARRIVAL = 'WAIT_BEAGLE_ARRIVAL'
     WAIT_PLACE_RECOVERY = 'WAIT_PLACE_XY_PITCH_APPROACH'
     WAIT_PLACE_ROTATE = 'WAIT_PLACE_ROTATE'
     WAIT_PLACE_CORRECTION = 'WAIT_PLACE_LIFT_CORRECTION'
     WAIT_PLACE_DESCENT = 'WAIT_PLACE_DESCENT'
     WAIT_PLACE_OPEN = 'WAIT_PLACE_GRIPPER_OPEN'
     WAIT_PLACE_RETRACT = 'WAIT_PLACE_RETRACT'
+    WAIT_RESET_RETRACT = 'WAIT_RESET_PLACE_RETRACT'
+    RESET_RETRACT_COMPLETE = 'RESET_PLACE_RETRACT_COMPLETE'
     WAIT_RETURN_STAGING = 'WAIT_RETURN_STAGING'
     WAIT_FINAL_CLOSE = 'WAIT_FINAL_GRIPPER_CLOSE'
     COMPLETE = 'COMPLETE'
@@ -89,12 +92,18 @@ class PickCoordinator(Node):
             'recover_grasp_max_z': 0.070,
             'recover_lift_min_z': 0.110,
             'recover_lift_max_z': 0.150,
+            'reset_place_retract_min_z': 0.110,
+            'reset_place_retract_max_z': 0.220,
             'place_correction_trigger_z': 0.120,
             'remembered_place_xyz': [0.1711, -0.2197, 0.1236],
             'remembered_place_release_xyz': [0.1711, -0.2197, 0.0500],
             'place_target_topic': '/pick_coordinator/place_target',
             'place_release_target_topic': '/pick_coordinator/place_release_target',
             'fk_position_bias': [0.00126, 0.0, 0.00055],
+            # Integrated operation keeps the loaded box above the receiving
+            # zone until the sorter explicitly confirms that Beagle is idle.
+            # Leave this false for the existing standalone pick workflow.
+            'require_beagle_place_release': False,
         }
         services = {
             'staging': '/movej_staging/confirm',
@@ -147,6 +156,8 @@ class PickCoordinator(Node):
         self.joint_feedback_time = None
         self.target = None
         self.target_received_time = None
+        self.empty_grasp_recovery = False
+        self.empty_grasp_failure_reason = None
         self.status_pub = self.create_publisher(String, '~/status', 10)
         self.place_target_pub = self.create_publisher(
             PoseStamped, self.p('place_target_topic'), 10)
@@ -170,7 +181,8 @@ class PickCoordinator(Node):
             'pick_descent': (self.WAIT_PICK_DESCENT,),
             'lift': (self.WAIT_LIFT,),
             'place_xy_transfer': (
-                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT),
+                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT,
+                self.WAIT_RESET_RETRACT),
             'place_recovery': (self.WAIT_PLACE_RECOVERY,),
             'place_rotate': (self.WAIT_PLACE_ROTATE,),
             'place_correction': (self.WAIT_PLACE_CORRECTION,),
@@ -185,6 +197,8 @@ class PickCoordinator(Node):
         self.gripper = ActionClient(self, GripperCommand, self.p('gripper_action'))
         self.create_service(Trigger, '~/start', self.on_start)
         self.create_service(Trigger, '~/continue', self.on_continue)
+        self.create_service(Trigger, '~/release_place', self.on_release_place)
+        self.create_service(Trigger, '~/reset_retract', self.on_reset_retract)
         self.create_service(Trigger, '~/recover_grasp', self.on_recover_grasp)
         self.create_service(Trigger, '~/recover_lift', self.on_recover_lift)
         self.create_service(Trigger, '~/cancel', self.on_cancel)
@@ -207,6 +221,8 @@ class PickCoordinator(Node):
     def fail(self, reason):
         self.pending_call = False
         self.pending_gripper = False
+        self.empty_grasp_recovery = False
+        self.empty_grasp_failure_reason = None
         self.enter(self.FAILED, f'{reason}; no further command sent')
 
     def on_joints(self, message):
@@ -301,6 +317,8 @@ class PickCoordinator(Node):
             return response
         self.target = None
         self.target_received_time = None
+        self.empty_grasp_recovery = False
+        self.empty_grasp_failure_reason = None
         response.success, response.message = self.request(
             'staging', self.WAIT_STAGING, 'staging')
         return response
@@ -375,12 +393,49 @@ class PickCoordinator(Node):
         response.success, response.message = False, f'continue is not valid in {self.state}'
         return response
 
+    def on_release_place(self, _request, response):
+        """Allow the final descent only after the receiving zone is safe."""
+        if self.state != self.WAIT_BEAGLE_ARRIVAL:
+            response.success, response.message = False, (
+                f'place release is not valid in {self.state}')
+            return response
+        self.publish_place_release_target()
+        response.success, response.message = self.request(
+            'place_descent', self.WAIT_PLACE_DESCENT,
+            'released single PTP place descent')
+        return response
+
+    def on_reset_retract(self, _request, response):
+        """Raise from the Beagle place zone before a reset may fold HOME."""
+        if self.state not in (self.IDLE, self.FAILED):
+            response.success, response.message = False, (
+                f'reset retract is not valid in {self.state}')
+            return response
+        error = self.preflight_error()
+        if error:
+            response.success, response.message = False, error
+            return response
+        z = self.actual_tcp_z()
+        if z is None or not (
+                float(self.p('reset_place_retract_min_z')) <= z <=
+                float(self.p('reset_place_retract_max_z'))):
+            response.success, response.message = False, (
+                f'TCP Z is outside safe place reset range: {z}')
+            return response
+        self.publish_place_target()
+        response.success, response.message = self.request(
+            'place_xy_transfer', self.WAIT_RESET_RETRACT,
+            f'reset retract to high place approach from Z={z:.4f}m')
+        return response
+
     def on_cancel(self, _request, response):
         active = self.state not in (self.IDLE, self.COMPLETE, self.FAILED)
         if self.pending_call or self.pending_gripper:
             response.success, response.message = False, (
                 'a command is active; cancel the stage node/action directly and inspect the robot')
             return response
+        self.empty_grasp_recovery = False
+        self.empty_grasp_failure_reason = None
         self.enter(self.IDLE, 'cancelled while idle between commands')
         response.success, response.message = active, 'cancelled' if active else 'already idle'
         return response
@@ -393,7 +448,8 @@ class PickCoordinator(Node):
             'pick_descent': (self.WAIT_PICK_DESCENT,),
             'lift': (self.WAIT_LIFT,),
             'place_xy_transfer': (
-                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT),
+                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT,
+                self.WAIT_RESET_RETRACT),
             'place_recovery': (self.WAIT_PLACE_RECOVERY,),
             'place_rotate': (self.WAIT_PLACE_ROTATE,),
             'place_correction': (self.WAIT_PLACE_CORRECTION,),
@@ -438,6 +494,11 @@ class PickCoordinator(Node):
             self.command_gripper(False, self.WAIT_PICK_CLOSE, 'pick gripper close')
             return
         if key == 'place_xy_transfer':
+            if self.state == self.WAIT_RESET_RETRACT:
+                self.enter(
+                    self.RESET_RETRACT_COMPLETE,
+                    'reset retract reached high place approach; HOME return is now safe')
+                return
             if self.state == self.WAIT_PLACE_RETRACT:
                 ok, result = self.request(
                     'staging', self.WAIT_RETURN_STAGING,
@@ -445,12 +506,17 @@ class PickCoordinator(Node):
                 if not ok:
                     self.fail(result)
                 return
-            self.publish_place_release_target()
-            ok, result = self.request(
-                'place_descent', self.WAIT_PLACE_DESCENT,
-                'automatic single PTP place descent')
-            if not ok:
-                self.fail(result)
+            if bool(self.p('require_beagle_place_release')):
+                self.enter(
+                    self.WAIT_BEAGLE_ARRIVAL,
+                    'high place transfer complete; waiting for Beagle place release')
+            else:
+                self.publish_place_release_target()
+                ok, result = self.request(
+                    'place_descent', self.WAIT_PLACE_DESCENT,
+                    'automatic single PTP place descent')
+                if not ok:
+                    self.fail(result)
             return
         if key == 'place_descent':
             self.command_gripper(True, self.WAIT_PLACE_OPEN, 'place gripper open')
@@ -676,9 +742,17 @@ class PickCoordinator(Node):
             if accepted_watchdog_grasp:
                 self.report(f'accepted watchdog grasp contact at {position:.4f}rad')
             if position < float(self.p('min_grasp_position')):
-                self.fail(
+                reason = (
                     f'pick failed: empty grasp ({position:.4f}rad < '
                     f'{float(self.p("min_grasp_position")):.4f}rad)')
+                self.empty_grasp_recovery = True
+                self.empty_grasp_failure_reason = reason
+                self.report(f'{reason}; returning safely to staging')
+                ok, result = self.request(
+                    'staging', self.WAIT_RETURN_STAGING,
+                    'empty-grasp safe return staging')
+                if not ok:
+                    self.fail(f'{reason}; safe return could not start: {result}')
                 return
             if position > float(self.p('max_grasp_position')):
                 self.fail(f'grasp position above range ({position:.4f}rad)')
@@ -708,7 +782,16 @@ class PickCoordinator(Node):
                 self.report(f'accepted watchdog final close at {position:.4f}rad')
             if accepted_stalled_empty_close:
                 self.report(f'accepted stalled final close at {position:.4f}rad')
-            self.enter(self.COMPLETE, f'cycle complete; final gripper={position:.4f}rad')
+            if self.empty_grasp_recovery:
+                reason = self.empty_grasp_failure_reason or 'pick failed: empty grasp'
+                self.empty_grasp_recovery = False
+                self.empty_grasp_failure_reason = None
+                self.enter(
+                    self.FAILED,
+                    f'{reason}; safely returned to staging; no further command sent')
+            else:
+                self.enter(
+                    self.COMPLETE, f'cycle complete; final gripper={position:.4f}rad')
 
     def actual_tcp_z(self):
         names = list(self.p('joint_names'))

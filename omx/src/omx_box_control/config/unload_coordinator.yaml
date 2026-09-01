@@ -1,0 +1,52 @@
+/**/unload_coordinator:
+  ros__parameters:
+    # These relative topics resolve inside the /unload_omx namespace.
+    movej_topic: omx_movej_controller/movej
+    joint_states_topic: joint_states
+    gripper_action: gripper_controller/gripper_cmd
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    gripper_joint_name: gripper_joint_1
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    staging_positions: [0.0, -0.532389, 0.334964, 1.303389, 0.0]
+
+    # Initial source pose: reuse the validated loading OMX place/release pose.
+    # Re-teach source_xy if the second OMX base is not geometrically symmetric.
+    source_xy: [-0.02621, -0.17335]
+    source_approach_z: 0.19253
+    source_grasp_z: 0.15599
+    destination_rotation: 3.141592654
+    joint5_position: 0.0
+    minimum_pitch: 1.047197551
+    maximum_pitch: 1.483529864
+    preferred_pitch: 1.221730476
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    path_samples: 101
+    minimum_transfer_path_z: 0.110
+    minimum_vertical_path_z: 0.145
+    maximum_ik_error: 0.006
+
+    move_duration: 13.0
+    rotate_duration: 24.0
+    vertical_duration: 3.0
+    staging_duration: 13.0
+    maximum_start_joint_delta: 2.0
+    joint_tolerance: 0.060
+    settle_time: 0.15
+    move_timeout_margin: 5.0
+    feedback_timeout: 0.5
+
+    gripper_open_position: 0.98
+    gripper_closed_position: 0.0
+    gripper_effort: 10.0
+    minimum_open_position: 0.90
+    min_grasp_position: 0.005
+    max_grasp_position: 0.70
+    gripper_watchdog_timeout: 2.5
+    gripper_watchdog_stable_time: 0.50
+    gripper_position_epsilon: 0.003
+
+    # Physical unloading OMX 0B4ABF... was detected and its planned cycle passed
+    # joint-limit/path-height preflight. Automatic GUI triggering remains separate.
+    dry_run: false

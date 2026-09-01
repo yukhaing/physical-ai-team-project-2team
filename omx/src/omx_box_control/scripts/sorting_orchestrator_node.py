@@ -6,6 +6,9 @@ import math
 import uuid
 
 import rclpy
+from action_msgs.msg import GoalStatus
+from control_msgs.action import GripperCommand
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray, String
@@ -14,6 +17,17 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 
 class SortingOrchestrator(Node):
+    PLACE_RESET_STATES = frozenset({
+        'WAIT_PLACE_HIGH_XY_TRANSFER',
+        'WAIT_BEAGLE_ARRIVAL',
+        'WAIT_PLACE_XY_PITCH_APPROACH',
+        'WAIT_PLACE_ROTATE',
+        'WAIT_PLACE_LIFT_CORRECTION',
+        'WAIT_PLACE_DESCENT',
+        'WAIT_PLACE_GRIPPER_OPEN',
+        'WAIT_PLACE_RETRACT',
+    })
+
     def __init__(self):
         super().__init__('sorting_orchestrator')
         self.declare_parameter('console_command_topic', '/console/command')
@@ -33,6 +47,9 @@ class SortingOrchestrator(Node):
         self.declare_parameter('auto_start_omx', False)
         self.declare_parameter('auto_continue_pick', False)
         self.declare_parameter('auto_complete_unload', False)
+        self.declare_parameter('automatic_unload_omx', False)
+        self.declare_parameter(
+            'unload_omx_status_topic', '/unload_omx/unload_coordinator/status')
         self.declare_parameter('continuous_operation', False)
         self.declare_parameter('auto_recover_failed_cycle', True)
         self.declare_parameter('failure_ready_delay', 1.0)
@@ -45,21 +62,59 @@ class SortingOrchestrator(Node):
         self.declare_parameter('home_joint_tolerance', 0.08)
         self.declare_parameter('home_settle_time', 0.20)
         self.declare_parameter('home_timeout', 12.0)
+        self.declare_parameter('reset_home_retry_limit', 1)
+        self.declare_parameter('gripper_action', '/gripper_controller/gripper_cmd')
+        self.declare_parameter('reset_gripper_open_position', 0.98)
+        self.declare_parameter('reset_gripper_closed_position', 0.0)
+        self.declare_parameter('reset_gripper_effort', 10.0)
+        self.declare_parameter('reset_gripper_min_open_position', 0.90)
+        self.declare_parameter('reset_gripper_max_closed_position', 0.05)
+        self.declare_parameter('reset_gripper_open_dwell', 2.0)
+        self.declare_parameter('reset_gripper_timeout', 4.0)
         self.enabled = False
         self.estopped = False
         self.job = None
+        # `job` is the box currently being delivered by Beagle.  Keep the
+        # following detected defect separate so OMX can pick it while Beagle
+        # returns with the previous box.
+        self.next_job = None
+        self.beagle_returning = False
+        # Preserve the delivery identity after the Beagle leaves the unload
+        # zone.  The delivery is logged as successful only when a later idle
+        # status confirms that it has physically returned to the waiting zone.
+        self.returning_delivery_job = None
+        self.beagle_return_requested = False
+        # Ignore the final WAIT_SIGNAL heartbeat that can race with a newly
+        # queued box_placed command.  An idle status is a completed round trip
+        # only after the Beagle has actually departed and return was requested.
+        self.beagle_delivery_departed = False
+        self.beagle_place_permitted = False
+        self.place_release_requested = False
         self.last_robot_target = None
         self.joints = {}
         self.returning_home = False
         self.awaiting_operator_unload = False
+        self.unload_omx_active = False
+        self.unload_omx_failure_logged = False
         self.coordinator_state = 'IDLE'
+        self.pick_continue_requested = False
+        self.grasp_continue_requested = False
         self.parking = False
         self.home_goal = None
         self.home_started = None
         self.home_stable_since = None
+        self.home_retry_count = 0
         self.failure_recovery_active = False
         self.failure_ready_started = None
         self.reset_active = False
+        self.reset_place_retract_required = False
+        self.reset_place_retract_started = False
+        self.reset_gripper_phase = None
+        self.reset_gripper_pending = False
+        self.reset_gripper_goal_handle = None
+        self.reset_gripper_started = None
+        self.reset_gripper_open_dwell_started = None
+        self.reset_gripper_cancel_requested = False
         self.beagle_connected = False
         self.beagle_ready = False
         self.beagle_disconnect_logged = False
@@ -76,13 +131,26 @@ class SortingOrchestrator(Node):
         self.create_subscription(String, self.p('beagle_status_topic'), self.on_beagle, 10)
         self.create_subscription(String, self.p('coordinator_status_topic'), self.on_coordinator, 10)
         self.create_subscription(
+            String, self.p('unload_omx_status_topic'), self.on_unload_omx, 10)
+        self.create_subscription(
             Float64MultiArray, self.p('external_yolo_topic'), self.on_external_yolo, 10)
         self.create_subscription(JointState, '/joint_states', self.on_joints, 10)
         self.create_timer(0.05, self.update_home)
+        self.create_timer(0.05, self.update_reset_gripper)
         self.create_timer(0.05, self.update_failure_recovery)
         self.coordinator_start = self.create_client(Trigger, '/pick_coordinator/start')
         self.coordinator_continue = self.create_client(Trigger, '/pick_coordinator/continue')
         self.coordinator_cancel = self.create_client(Trigger, '/pick_coordinator/cancel')
+        self.coordinator_release_place = self.create_client(
+            Trigger, '/pick_coordinator/release_place')
+        self.coordinator_reset_retract = self.create_client(
+            Trigger, '/pick_coordinator/reset_retract')
+        self.reset_gripper = ActionClient(
+            self, GripperCommand, self.p('gripper_action'))
+        self.unload_omx_start = self.create_client(
+            Trigger, '/unload_omx/unload_coordinator/start')
+        self.unload_omx_cancel = self.create_client(
+            Trigger, '/unload_omx/unload_coordinator/cancel')
         self.cancel_clients = [self.coordinator_cancel] + [
             self.create_client(Trigger, name) for name in (
             '/movej_staging/cancel', '/movej_xy_approach/cancel',
@@ -139,9 +207,6 @@ class SortingOrchestrator(Node):
         if self.failure_recovery_active or self.parking:
             self.report('Selection ignored: OMX is recovering')
             return
-        if self.job:
-            self.report('Selection ignored: a defect transfer is already in progress')
-            return
         try:
             selection = json.loads(message.data)
             label = selection['class']
@@ -150,7 +215,12 @@ class SortingOrchestrator(Node):
         except (KeyError, ValueError, TypeError, json.JSONDecodeError) as error:
             self.report(f'Selection rejected: {error}')
             return
-        self.start_defect_transfer(selection)
+        if self.beagle_returning or self.beagle_return_requested:
+            self.queue_next_defect(selection)
+        elif self.job or self.next_job:
+            self.report('Selection ignored: a defect transfer is already in progress')
+        else:
+            self.start_defect_transfer(selection)
 
     def on_external_yolo(self, message):
         """Dispatch Beagle from the OMX integration interface before pick starts."""
@@ -159,7 +229,8 @@ class SortingOrchestrator(Node):
         # no target that can be republished after staging.
         if not bool(self.get_parameter('accept_external_yolo').value):
             return
-        if (not self.enabled or self.estopped or self.job or
+        if (not self.enabled or self.estopped or
+                (self.job and not (self.beagle_returning or self.beagle_return_requested)) or
                 self.failure_recovery_active or self.reset_active or
                 self.parking or len(message.data) < 4):
             return
@@ -168,9 +239,46 @@ class SortingOrchestrator(Node):
             return
         if not all(math.isfinite(value) for value in (confidence, robot_x, robot_y)):
             return
-        self.start_defect_transfer({
+        selection = {
             'class': 'defect', 'confidence': confidence,
-            'robot_x': robot_x, 'robot_y': robot_y, 'source': 'omx_yolo_bridge'})
+            'robot_x': robot_x, 'robot_y': robot_y, 'source': 'omx_yolo_bridge'}
+        if self.beagle_returning or self.beagle_return_requested:
+            self.queue_next_defect(selection)
+        else:
+            self.start_defect_transfer(selection)
+
+    def queue_next_defect(self, selection):
+        """Keep only the newest stable defect while Beagle is returning."""
+        if self.next_job is not None and self.next_job.get('job_id'):
+            # Once staging starts, the retained pixel target and job identity
+            # belong to the in-flight OMX cycle.  Replacing either while the
+            # arm is moving can detach the final box_placed command from its
+            # job and overwrite stage targets.
+            self.report(
+                'OMX_PICKING: parallel pick is active; new detection ignored')
+            return
+        job = dict(selection)
+        if self.last_robot_target:
+            job.update(self.last_robot_target)
+        self.next_job = job
+        if self.beagle_returning:
+            self.report('BEAGLE_RETURNING_PICKING: next defect queued; OMX pick starting')
+            self.start_queued_pick()
+        else:
+            self.report('BEAGLE_RETURNING_QUEUED: next defect queued for Beagle return')
+
+    def start_queued_pick(self):
+        if (not self.beagle_returning or self.next_job is None or self.estopped or
+                not self.enabled or self.failure_recovery_active or self.parking):
+            return
+        if self.coordinator_state not in ('IDLE', 'COMPLETE', 'FAILED'):
+            return
+        self.next_job['job_id'] = str(uuid.uuid4())
+        self.beagle_place_permitted = False
+        self.place_release_requested = False
+        self.pick_continue_requested = False
+        self.grasp_continue_requested = False
+        self.call(self.coordinator_start, 'OMX parallel staging')
 
     def start_defect_transfer(self, selection):
         if self._beagle_required() and not self._beagle_available():
@@ -200,6 +308,8 @@ class SortingOrchestrator(Node):
                 'robot_x': float(target['robot_x']), 'robot_y': float(target['robot_y'])}
             if self.job:
                 self.job.update(self.last_robot_target)
+            if self.next_job:
+                self.next_job.update(self.last_robot_target)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return
 
@@ -217,6 +327,7 @@ class SortingOrchestrator(Node):
             was_connected = self.beagle_connected
             self.beagle_connected = False
             self.beagle_ready = False
+            self.beagle_place_permitted = False
             if (was_connected and not self.beagle_disconnect_logged and
                     not self.beagle_failure_active):
                 self.beagle_disconnect_logged = True
@@ -233,12 +344,67 @@ class SortingOrchestrator(Node):
             self.beagle_disconnect_logged = False
             self.beagle_failure_active = False
             self.last_beagle_failure_key = None
+            active_pick = self.next_job if self.beagle_returning else self.job
+            if (active_pick is not None and not self.returning_home and
+                    not self.awaiting_operator_unload):
+                # Remember an early idle arrival until OMX reaches high place.
+                self.beagle_place_permitted = True
         elif state in ('moving_to_defect', 'defect_arrived', 'returning'):
             self.beagle_connected = True
             self.beagle_ready = False
 
+        incoming_job_id = status.get('job_id')
+        if state in ('moving_to_defect', 'defect_arrived'):
+            self.beagle_delivery_departed = True
+        if state == 'defect_arrived' and self.job is None and incoming_job_id:
+            # Recover from an earlier stale-idle race that detached the job
+            # just before the real mission reported its defect-zone arrival.
+            self.job = {'job_id': incoming_job_id}
+            self.returning_home = True
+            self.beagle_return_requested = False
+            self.get_logger().warning(
+                f'Restored Beagle delivery job {incoming_job_id} from defect arrival')
+
+        if (state == 'idle' and self.returning_delivery_job is not None and
+                incoming_job_id in (None, self.returning_delivery_job['job_id'])):
+            completed_job = self.returning_delivery_job
+            self.returning_delivery_job = None
+            self.event_pub.publish(String(data=json.dumps({
+                'event': 'return_completed',
+                'job_id': completed_job['job_id'],
+            })))
+            # Keep the parallel-return mode until a queued OMX placement is
+            # released and promoted to the next delivery job.
+            if self.next_job is None:
+                self.beagle_returning = False
+            self.beagle_delivery_departed = False
+            if self.next_job is not None and self.next_job.get('job_id'):
+                # Do not publish BEAGLE_HOME/BEAGLE_RETURNING here: those are
+                # automatic-selection states.  The parallel pick is already
+                # locked and must finish with the same target and job ID.
+                self.report(
+                    'OMX_PICKING: Beagle returned; current parallel pick continues')
+            else:
+                self.report('BEAGLE_HOME: returned to waiting zone; delivery complete')
+
         if not self.job or status.get('job_id') not in (None, self.job['job_id']):
-            if state == 'idle' and self.enabled:
+            if state in ('failed', 'stopped'):
+                # A return failure can refer to the completed delivery job,
+                # which has deliberately been detached from `self.job` while
+                # OMX works on `next_job`.  It still must block descent.
+                self.beagle_failure_active = True
+                self.beagle_place_permitted = False
+                failure_key = (state, status.get('job_id'), status.get('detail'))
+                if failure_key != self.last_beagle_failure_key:
+                    self.last_beagle_failure_key = failure_key
+                    self.publish_failure_event(
+                        'beagle_operation_failed',
+                        str(status.get('detail') or state), self.next_job)
+                self.report(f'BEAGLE_{state.upper()}: OMX remains locked')
+                return
+            if state == 'idle' and self.next_job is not None:
+                self.release_place_if_ready()
+            if state == 'idle' and self.enabled and self.next_job is None:
                 self.report('READY: Beagle waiting at receiving zone')
             return
         if state == 'signal_sent':
@@ -252,16 +418,41 @@ class SortingOrchestrator(Node):
         elif state == 'defect_arrived':
             if self.returning_home and not self.awaiting_operator_unload:
                 self.awaiting_operator_unload = True
-                self.report(
-                    'BEAGLE_DEFECT_ARRIVED: unload the box, then press 하역 완료')
-                if bool(self.get_parameter('auto_complete_unload').value):
+                self.unload_omx_failure_logged = False
+                if bool(self.get_parameter('automatic_unload_omx').value):
+                    self.start_unload_omx()
+                elif bool(self.get_parameter('auto_complete_unload').value):
                     self.return_home_after_unload()
+                else:
+                    self.report(
+                        'BEAGLE_DEFECT_ARRIVED: unload the box, then press 하역 완료')
         elif state == 'returning':
-            self.report('BEAGLE_RETURNING: moving back to receiving zone')
-        elif state == 'idle' and self.returning_home:
+            # Detach the delivered box so OMX can prepare the next one in
+            # parallel, but do not mark it successful until Beagle reports
+            # idle after physically reaching the waiting zone.
+            completed_job = self.job
+            self.returning_delivery_job = completed_job
+            self.job = None
+            self.returning_home = False
+            self.awaiting_operator_unload = False
+            self.unload_omx_active = False
+            self.beagle_returning = True
+            self.beagle_return_requested = False
+            self.beagle_delivery_departed = False
+            self.beagle_place_permitted = False
+            self.place_release_requested = False
+            if self.next_job is not None:
+                self.report('BEAGLE_RETURNING_PICKING: Beagle returning; starting queued OMX pick')
+                self.start_queued_pick()
+            else:
+                self.report('BEAGLE_RETURNING: moving back; waiting for next defect')
+        elif (state == 'idle' and self.returning_home and
+              self.beagle_delivery_departed and self.beagle_return_requested):
             job_id = self.job['job_id']
             self.returning_home = False
             self.awaiting_operator_unload = False
+            self.unload_omx_active = False
+            self.beagle_delivery_departed = False
             self.event_pub.publish(String(data=json.dumps({
                 'event': 'return_completed', 'job_id': job_id})))
             self.job = None
@@ -274,6 +465,7 @@ class SortingOrchestrator(Node):
             self.report('BEAGLE_STOP_UNSUPPORTED: no remote stop was sent')
         elif state in ('failed', 'stopped'):
             self.beagle_failure_active = True
+            self.beagle_place_permitted = False
             failure_key = (state, status.get('job_id'), status.get('detail'))
             if failure_key != self.last_beagle_failure_key:
                 self.last_beagle_failure_key = failure_key
@@ -281,6 +473,51 @@ class SortingOrchestrator(Node):
                     'beagle_operation_failed',
                     str(status.get('detail') or state), self.job)
             self.report(f'BEAGLE_{state.upper()}: OMX remains locked')
+
+    def start_unload_omx(self):
+        if self.unload_omx_active:
+            return
+        if not self.unload_omx_start.service_is_ready():
+            self.handle_unload_omx_failure(
+                'unload OMX start service is unavailable')
+            return
+        self.unload_omx_active = True
+        self.report(
+            'UNLOAD_OMX_STARTING: Beagle arrived; automatic unloading requested')
+        future = self.unload_omx_start.call_async(Trigger.Request())
+        future.add_done_callback(self.on_unload_omx_start_done)
+
+    def on_unload_omx_start_done(self, future):
+        try:
+            result = future.result()
+        except Exception as error:  # noqa: BLE001 - ROS future boundary
+            self.handle_unload_omx_failure(f'unload OMX start error: {error}')
+            return
+        if result is None or not result.success:
+            self.handle_unload_omx_failure(
+                result.message if result is not None else 'empty start response')
+
+    def on_unload_omx(self, message):
+        if not self.job or not self.awaiting_operator_unload:
+            return
+        state, _, detail = message.data.partition(':')
+        if state == 'COMPLETE' and self.unload_omx_active:
+            self.unload_omx_active = False
+            self.report('UNLOAD_OMX_COMPLETE: box unloaded; releasing Beagle')
+            self.return_home_after_unload()
+        elif state == 'FAILED' and self.unload_omx_active:
+            self.handle_unload_omx_failure(detail.strip() or message.data)
+        elif self.unload_omx_active:
+            self.report(f'UNLOAD_OMX_ACTIVE: {message.data}')
+
+    def handle_unload_omx_failure(self, reason):
+        self.unload_omx_active = False
+        if not self.unload_omx_failure_logged:
+            self.unload_omx_failure_logged = True
+            self.publish_failure_event('unload_omx_failed', reason, self.job)
+        self.report(
+            f'UNLOAD_OMX_FAILED: {reason}; Beagle remains stopped. '
+            'Inspect the unload OMX or unload manually, then press 하역 완료')
 
     def publish_failure_event(self, failure_type, reason, job=None):
         event = dict(job or {})
@@ -305,41 +542,121 @@ class SortingOrchestrator(Node):
         elif not self.job or self.job.get('beagle_state') not in ('arrived', 'receiving'):
             self.report('OMX start blocked: wait for Beagle at receiving zone')
         else:
+            self.pick_continue_requested = False
+            self.grasp_continue_requested = False
             self.call(self.coordinator_start, 'OMX staging')
 
     def on_coordinator(self, message):
         state = message.data.split(':', 1)[0]
         self.coordinator_state = state
-        if not self.job:
+        if self.reset_active and self.reset_place_retract_started:
+            if state == 'RESET_PLACE_RETRACT_COMPLETE':
+                self.reset_place_retract_started = False
+                self.reset_place_retract_required = False
+                self.report(
+                    'RESETTING: place clearance reached; returning OMX to folded HOME')
+                if not self.start_home():
+                    self.reset_active = False
+                    self.report('RESET_FAILED: unable to start folded HOME return')
+                return
+            if state == 'FAILED':
+                self.reset_place_retract_started = False
+                self.reset_place_retract_required = False
+                self.reset_active = False
+                self.report(
+                    f'RESET_FAILED: safe place retract failed: {message.data}; '
+                    'OMX remains stopped')
+                return
+        active_pick = self.next_job if self.beagle_returning else self.job
+        if not active_pick:
             return
         if state == 'WAIT_PICK_TARGET':
-            # The coordinator clears old targets at cycle start; restore the retained UI click.
-            self.pixel_pub.publish(String(data=json.dumps(self.job)))
-            if bool(self.get_parameter('auto_continue_pick').value):
+            detail = message.data.split(':', 1)[1] if ':' in message.data else ''
+            # The first WAIT_PICK_TARGET means staging is complete but the
+            # coordinator has cleared its old target.  Publish the retained
+            # click and wait for its explicit "pick target received" status
+            # before calling ~/continue; calling in the same callback races
+            # the target subscriber and leaves the cycle stuck here.
+            if 'pick target received' not in detail:
+                self.pixel_pub.publish(String(data=json.dumps(active_pick)))
+                self.report('TARGET_SYNC: restoring the selected box target')
+                return
+            if (bool(self.get_parameter('auto_continue_pick').value) and
+                    not self.pick_continue_requested):
+                self.pick_continue_requested = True
                 self.report('TARGET_READY: auto-continue enabled; beginning pick flow')
                 self.call(self.coordinator_continue, 'OMX continue')
             else:
                 self.report('TARGET_READY: press 집기 계속 to begin the existing pick flow')
         elif state == 'WAIT_GRASP_CONFIRM':
-            if bool(self.get_parameter('auto_continue_pick').value):
+            if (bool(self.get_parameter('auto_continue_pick').value) and
+                    not self.grasp_continue_requested):
+                self.grasp_continue_requested = True
                 self.report('GRASP_READY: auto-continue enabled; beginning loaded lift')
                 self.call(self.coordinator_continue, 'OMX loaded lift continue')
             else:
                 self.report('GRASP_READY: inspect the grasp, then press 집기 계속')
+        elif state == 'WAIT_BEAGLE_ARRIVAL':
+            self.report('OMX_WAITING_FOR_BEAGLE: box is above receiving position')
+            self.release_place_if_ready()
         elif state == 'COMPLETE' and not self.returning_home and not self.awaiting_operator_unload:
+            # A parallel pick becomes Beagle's delivery job only after OMX has
+            # completed the released place sequence.
+            if self.beagle_returning:
+                self.job = self.next_job
+                self.next_job = None
+                self.beagle_returning = False
+                self.beagle_place_permitted = False
+                self.place_release_requested = False
+                active_pick = self.job
+            if active_pick is None or not active_pick.get('job_id'):
+                self.recover_failed_cycle(
+                    'place handoff blocked: active job identity is missing')
+                return
             self.event_pub.publish(String(data=json.dumps(
-                dict(self.job, event='awaiting_operator_unload'))))
+                dict(active_pick, event='awaiting_operator_unload'))))
             if bool(self.get_parameter('bypass_beagle').value):
                 self.awaiting_operator_unload = True
                 self.report('OMX_COMPLETE: press 하역 완료 after removing the box')
             else:
                 self.returning_home = True
+                self.beagle_delivery_departed = False
+                self.beagle_return_requested = False
                 self.beagle_pub.publish(String(data=json.dumps({
-                    'command': 'box_placed', 'job_id': self.job['job_id']})))
+                    'command': 'box_placed', 'job_id': active_pick['job_id']})))
                 self.report(
                     'OMX_COMPLETE: box placed; Beagle delivery started')
         elif state == 'FAILED':
             self.recover_failed_cycle(message.data)
+
+    def release_place_if_ready(self):
+        """Release one waiting place only when this Beagle is healthy and idle."""
+        active_pick = self.next_job if self.beagle_returning else self.job
+        if (self.coordinator_state != 'WAIT_BEAGLE_ARRIVAL' or
+                active_pick is None or self.place_release_requested):
+            return
+        if (not self.beagle_place_permitted or not self.beagle_connected or
+                self.beagle_failure_active or self.estopped):
+            return
+        if not self.coordinator_release_place.service_is_ready():
+            self.report('OMX_WAITING_FOR_BEAGLE: place release service unavailable')
+            return
+        self.place_release_requested = True
+        self.report('BEAGLE_READY_RELEASE_PLACE: Beagle idle; releasing OMX place descent')
+        future = self.coordinator_release_place.call_async(Trigger.Request())
+        future.add_done_callback(self.on_release_place_done)
+
+    def on_release_place_done(self, future):
+        try:
+            result = future.result()
+        except Exception as error:  # noqa: BLE001 - ROS future boundary
+            self.place_release_requested = False
+            self.report(f'OMX_WAITING_FOR_BEAGLE: place release error: {error}')
+            return
+        if result is None or not result.success:
+            self.place_release_requested = False
+            detail = result.message if result is not None else 'empty response'
+            self.report(f'OMX_WAITING_FOR_BEAGLE: place release rejected: {detail}')
 
     def recover_failed_cycle(self, reason):
         """Cancel a failed cycle, discard its job, then reopen automatic detection."""
@@ -349,25 +666,63 @@ class SortingOrchestrator(Node):
             self.report('OMX_FAILED: inspect robot before reset')
             return
 
+        failure_type = self.classify_omx_failure(reason)
+        retry_pick = failure_type == 'box_pick_failed'
+        failed_job = self.next_job if self.beagle_returning else self.job
+        previous_delivery_in_transit = self.returning_delivery_job is not None
+
         self.failure_recovery_active = True
         self.failure_ready_started = None
         self.awaiting_operator_unload = False
-        self.returning_home = False
-        failed_job = self.job
-        self.job = None
-        self.publish_failure_event(
-            self.classify_omx_failure(reason), reason, failed_job)
-        self.beagle_pub.publish(String(data=json.dumps({
-            'command': 'stop',
-            'job_id': failed_job.get('job_id') if failed_job else None,
-        })))
-        self.report('RECOVERING: pick failed; current cycle cancelled')
+        self.unload_omx_active = False
+        self.beagle_place_permitted = False
+        self.place_release_requested = False
+        if retry_pick:
+            # A pick failure occurs before Beagle delivery starts.  Keep the
+            # Beagle stationary at the receiving zone and reopen detection
+            # after the coordinator has safely returned to staging.
+            if self.beagle_returning:
+                self.next_job = None
+                # If the previous delivery already reached idle, parallel
+                # return mode is no longer needed for the replacement pick.
+                if not previous_delivery_in_transit:
+                    self.beagle_returning = False
+            else:
+                self.job = None
+                self.next_job = None
+                self.returning_home = False
+                self.beagle_return_requested = False
+                self.beagle_delivery_departed = False
+            if not self.beagle_returning:
+                self.beagle_ready = (
+                    self.beagle_connected and not self.beagle_failure_active)
+            self.publish_failure_event(failure_type, reason, failed_job)
+            self.report(
+                'RECOVERING: pick failed; returning to detection without stopping Beagle')
+        else:
+            # Placement or other robot failures may leave the load in an
+            # unknown state, so preserve the existing fail-safe Beagle stop.
+            self.returning_home = False
+            self.beagle_returning = False
+            self.returning_delivery_job = None
+            self.beagle_return_requested = False
+            self.beagle_delivery_departed = False
+            self.job = None
+            self.next_job = None
+            self.publish_failure_event(failure_type, reason, failed_job)
+            self.beagle_pub.publish(String(data=json.dumps({
+                'command': 'stop',
+                'job_id': failed_job.get('job_id') if failed_job else None,
+            })))
+            self.report('RECOVERING: OMX failure; current cycle cancelled')
 
         # Stop every stage as a defensive measure. The coordinator cancel response
         # is the synchronization point before detection is enabled again.
         for client in self.cancel_clients[1:]:
             if client.service_is_ready():
                 client.call_async(Trigger.Request())
+        if self.unload_omx_cancel.service_is_ready():
+            self.unload_omx_cancel.call_async(Trigger.Request())
         if self.coordinator_cancel.service_is_ready():
             future = self.coordinator_cancel.call_async(Trigger.Request())
             future.add_done_callback(self.on_failure_cancel_done)
@@ -385,23 +740,42 @@ class SortingOrchestrator(Node):
             self.report('RESETTING: cycle cancellation is already active')
             return
 
+        self.reset_place_retract_required = (
+            self.reset_place_retract_required or
+            self.coordinator_state in self.PLACE_RESET_STATES)
+        self.reset_place_retract_started = False
         self.reset_active = True
         self.enabled = False
-        self.estopped = False
         self.returning_home = False
+        self.beagle_returning = False
+        self.returning_delivery_job = None
+        self.beagle_return_requested = False
+        self.beagle_delivery_departed = False
+        self.beagle_place_permitted = False
+        self.place_release_requested = False
         self.awaiting_operator_unload = False
+        self.unload_omx_active = False
         self.failure_recovery_active = False
         self.failure_ready_started = None
         reset_job = self.job
         self.job = None
+        self.next_job = None
         if reset_job is not None:
             self.beagle_pub.publish(String(data=json.dumps({
                 'command': 'stop', 'job_id': reset_job.get('job_id')})))
+        if not bool(self.get_parameter('bypass_beagle').value):
+            # Reset the Beagle emergency latch immediately.  The Beagle
+            # mission resets to stationary WAIT_SIGNAL, so this does not start
+            # autonomous motion while OMX is returning HOME.
+            self.beagle_pub.publish(String(data=json.dumps({
+                'command': 'reconnect', 'job_id': None})))
         self.report('RESETTING: cancelling the current cycle')
 
         for client in self.cancel_clients[1:]:
             if client.service_is_ready():
                 client.call_async(Trigger.Request())
+        if self.unload_omx_cancel.service_is_ready():
+            self.unload_omx_cancel.call_async(Trigger.Request())
         if self.coordinator_cancel.service_is_ready():
             future = self.coordinator_cancel.call_async(Trigger.Request())
             future.add_done_callback(self.on_reset_cancel_done)
@@ -422,15 +796,203 @@ class SortingOrchestrator(Node):
     def finish_reset(self):
         if not self.reset_active:
             return
-        self.reset_active = False
         self.coordinator_state = 'IDLE'
-        if self._beagle_required() and not self._beagle_available():
-            self.beagle_pub.publish(String(data=json.dumps({
-                'command': 'reconnect', 'job_id': None})))
+        if self.reset_place_retract_required:
+            if not self.coordinator_reset_retract.service_is_ready():
+                self.reset_active = False
+                self.report(
+                    'RESET_FAILED: safe place retract service unavailable; '
+                    'OMX remains stopped')
+                return
+            self.report('RESETTING: raising clear of the Beagle box before HOME return')
+            future = self.coordinator_reset_retract.call_async(Trigger.Request())
+            future.add_done_callback(self.on_reset_retract_requested)
+            return
+        self.report('RESETTING: returning OMX to folded HOME before releasing the box')
+        if not self.start_home():
+            self.reset_active = False
+            self.report('RESET_FAILED: unable to start folded HOME return')
+
+    def on_reset_retract_requested(self, future):
+        if not self.reset_active:
+            return
+        try:
+            result = future.result()
+        except Exception as error:  # noqa: BLE001 - ROS future boundary
+            self.reset_place_retract_required = False
+            self.reset_active = False
             self.report(
-                'RESET: initial state restored; Beagle reconnect requested. Press 가동')
+                f'RESET_FAILED: safe place retract request error: {error}; '
+                'OMX remains stopped')
+            return
+        if result is None or not result.success:
+            detail = result.message if result is not None else 'empty response'
+            self.reset_place_retract_required = False
+            self.reset_active = False
+            self.report(
+                f'RESET_FAILED: safe place retract rejected: {detail}; '
+                'OMX remains stopped')
+            return
+        self.reset_place_retract_started = True
+        self.report('RESETTING: waiting for measured high-place clearance')
+
+    def complete_reset(self):
+        """Finish reset only after HOME and the open/close release cycle."""
+        self.reset_active = False
+        self.estopped = False
+        self.reset_place_retract_required = False
+        self.reset_place_retract_started = False
+        self.reset_gripper_phase = None
+        self.reset_gripper_pending = False
+        self.reset_gripper_open_dwell_started = None
+        if self._beagle_required() and not self._beagle_available():
+            self.report(
+                'RESET: initial state restored; Beagle connection is in progress. Press 가동 after connected')
         else:
-            self.report('RESET: cycle cancelled; initial state restored. Press 가동')
+            self.report('RESET: HOME reached and gripper release cycle complete. Press 가동')
+
+    def start_reset_gripper_cycle(self):
+        if not self.reset_active:
+            return
+        if not self.reset_gripper.server_is_ready():
+            self.report('RESET_FAILED: HOME reached but gripper action is unavailable')
+            self.reset_active = False
+            return
+        self.reset_gripper_open_dwell_started = None
+        self.reset_gripper_phase = 'OPEN'
+        self.send_reset_gripper_goal(
+            float(self.get_parameter('reset_gripper_open_position').value))
+
+    def begin_reset_gripper_open_dwell(self, position):
+        dwell = max(
+            0.0, float(self.get_parameter('reset_gripper_open_dwell').value))
+        self.reset_gripper_phase = 'OPEN_DWELL'
+        self.reset_gripper_open_dwell_started = self.get_clock().now()
+        self.report(
+            f'RESETTING: gripper open at {position:.4f}rad; holding {dwell:.1f}s')
+
+    def send_reset_gripper_goal(self, position):
+        self.reset_gripper_pending = True
+        self.reset_gripper_goal_handle = None
+        self.reset_gripper_started = self.get_clock().now()
+        self.reset_gripper_cancel_requested = False
+        goal = GripperCommand.Goal()
+        goal.command.position = position
+        goal.command.max_effort = float(
+            self.get_parameter('reset_gripper_effort').value)
+        phase = self.reset_gripper_phase
+        future = self.reset_gripper.send_goal_async(goal)
+        future.add_done_callback(
+            lambda result: self.on_reset_gripper_goal(phase, result))
+        self.report(f'RESETTING: gripper {phase.lower()} command requested')
+
+    def on_reset_gripper_goal(self, phase, future):
+        if not self.reset_active or phase != self.reset_gripper_phase:
+            return
+        try:
+            handle = future.result()
+        except Exception as error:  # noqa: BLE001 - ROS future boundary
+            self.reset_gripper_failed(phase, f'goal error: {error}')
+            return
+        if not handle.accepted:
+            self.reset_gripper_failed(phase, 'goal rejected')
+            return
+        self.reset_gripper_goal_handle = handle
+        handle.get_result_async().add_done_callback(
+            lambda result: self.on_reset_gripper_result(phase, result))
+
+    def on_reset_gripper_result(self, phase, future):
+        if not self.reset_active or phase != self.reset_gripper_phase:
+            return
+        self.reset_gripper_pending = False
+        self.reset_gripper_goal_handle = None
+        self.reset_gripper_started = None
+        self.reset_gripper_cancel_requested = False
+        try:
+            wrapped = future.result()
+        except Exception as error:  # noqa: BLE001 - ROS future boundary
+            self.reset_gripper_failed(phase, f'result error: {error}')
+            return
+        measured = self.joints.get('gripper_joint_1')
+        reached_position = (
+            measured is not None and (
+                measured >= float(self.get_parameter('reset_gripper_min_open_position').value)
+                if phase == 'OPEN' else
+                measured <= float(self.get_parameter('reset_gripper_max_closed_position').value)))
+        if not reached_position:
+            self.reset_gripper_failed(
+                phase, f'action status={wrapped.status}; gripper feedback did not reach target')
+            return
+        if phase == 'OPEN':
+            self.begin_reset_gripper_open_dwell(measured)
+        else:
+            self.complete_reset()
+
+    def reset_gripper_failed(self, phase, reason):
+        if self.reset_gripper_goal_handle is not None:
+            self.reset_gripper_goal_handle.cancel_goal_async()
+        self.reset_gripper_pending = False
+        self.reset_gripper_phase = None
+        self.reset_gripper_goal_handle = None
+        self.reset_gripper_started = None
+        self.reset_gripper_open_dwell_started = None
+        self.reset_gripper_cancel_requested = False
+        self.reset_active = False
+        self.report(f'RESET_FAILED: gripper {phase.lower()} failed after HOME: {reason}')
+
+    def complete_reached_reset_gripper_phase(self, position):
+        """Advance from measured feedback without waiting for a stuck action result."""
+        phase = self.reset_gripper_phase
+        handle = self.reset_gripper_goal_handle
+        self.reset_gripper_pending = False
+        self.reset_gripper_goal_handle = None
+        self.reset_gripper_started = None
+        self.reset_gripper_cancel_requested = False
+        self.report(
+            f"RESETTING: gripper {phase.lower()} reached "
+            f"{position:.4f}rad; advancing reset")
+        if handle is not None:
+            handle.cancel_goal_async()
+        if phase == "OPEN":
+            self.begin_reset_gripper_open_dwell(position)
+        else:
+            self.complete_reset()
+
+    def update_reset_gripper(self):
+        """Hold a reached opening, then accept feedback if ID16 hangs."""
+        if not self.reset_active:
+            return
+        if self.reset_gripper_phase == 'OPEN_DWELL':
+            if self.reset_gripper_open_dwell_started is None:
+                return
+            elapsed = (
+                self.get_clock().now() -
+                self.reset_gripper_open_dwell_started).nanoseconds / 1e9
+            dwell = float(self.get_parameter('reset_gripper_open_dwell').value)
+            if elapsed < max(0.0, dwell):
+                return
+            self.reset_gripper_open_dwell_started = None
+            self.reset_gripper_phase = 'CLOSE'
+            self.send_reset_gripper_goal(
+                float(self.get_parameter('reset_gripper_closed_position').value))
+            return
+        if (not self.reset_gripper_pending or
+                self.reset_gripper_started is None):
+            return
+        if self.reset_gripper_goal_handle is None or self.reset_gripper_cancel_requested:
+            return
+        position = self.joints.get("gripper_joint_1")
+        reached = position is not None and (
+            position >= float(self.get_parameter("reset_gripper_min_open_position").value)
+            if self.reset_gripper_phase == "OPEN" else
+            position <= float(self.get_parameter("reset_gripper_max_closed_position").value))
+        if reached:
+            self.complete_reached_reset_gripper_phase(position)
+            return
+        elapsed = (self.get_clock().now() - self.reset_gripper_started).nanoseconds / 1e9
+        if elapsed >= float(self.get_parameter("reset_gripper_timeout").value):
+            self.reset_gripper_failed(
+                self.reset_gripper_phase, "timed out waiting for gripper feedback")
 
     @staticmethod
     def classify_omx_failure(reason):
@@ -471,6 +1033,12 @@ class SortingOrchestrator(Node):
         self.failure_ready_started = None
         if self.estopped:
             self.report('LOCKED: failed cycle cleared; reset emergency stop')
+        elif self.beagle_returning:
+            self.report(
+                'BEAGLE_RETURNING: pick failure cleared; waiting for the next defect box')
+        elif self._beagle_required() and not self._beagle_available():
+            self.report(
+                'WAIT_BEAGLE: pick failure cleared; waiting for Beagle at receiving zone')
         elif self.enabled:
             self.report('READY: failed cycle cleared; waiting for the next defect box')
         else:
@@ -489,6 +1057,9 @@ class SortingOrchestrator(Node):
             self.report('Return blocked: system is disabled or emergency locked')
         elif not self.job or not self.awaiting_operator_unload:
             self.report('Operator unload signal ignored: no defect box is waiting at the loading station')
+        elif self.unload_omx_active:
+            self.report(
+                'Operator unload signal ignored: automatic unload OMX is still active')
         elif bool(self.get_parameter('bypass_beagle').value):
             job_id = self.job['job_id']
             self.awaiting_operator_unload = False
@@ -501,6 +1072,7 @@ class SortingOrchestrator(Node):
                 self.report('BEAGLE_HOME: Beagle bypass enabled; defect transfer complete; ready for the next detection')
         else:
             self.awaiting_operator_unload = False
+            self.beagle_return_requested = True
             self.beagle_pub.publish(String(data=json.dumps({
                 'command': 'operator_unloaded',
                 'job_id': self.job['job_id']})))
@@ -526,11 +1098,22 @@ class SortingOrchestrator(Node):
             self.start_home()
             return
 
+        self.reset_place_retract_required = (
+            self.coordinator_state in self.PLACE_RESET_STATES)
+        self.reset_place_retract_started = False
         self.parking = False
         self.enabled = False
         self.estopped = True
         self.awaiting_operator_unload = False
+        self.unload_omx_active = False
         self.returning_home = False
+        self.beagle_returning = False
+        self.returning_delivery_job = None
+        self.beagle_return_requested = False
+        self.beagle_delivery_departed = False
+        self.beagle_place_permitted = False
+        self.place_release_requested = False
+        self.next_job = None
         self.failure_recovery_active = False
         self.failure_ready_started = None
         self.reset_active = False
@@ -539,6 +1122,8 @@ class SortingOrchestrator(Node):
         for client in self.cancel_clients:
             if client.service_is_ready():
                 client.call_async(Trigger.Request())
+        if self.unload_omx_cancel.service_is_ready():
+            self.unload_omx_cancel.call_async(Trigger.Request())
         names = [f'joint{i}' for i in range(1, 6)]
         if all(name in self.joints for name in names):
             hold = JointTrajectory(joint_names=names)
@@ -549,18 +1134,18 @@ class SortingOrchestrator(Node):
         self.report('SOFTWARE_EMERGENCY_STOP: commands cancelled and hold requested; '
                     'use physical E-stop for immediate hardware stop')
 
-    def start_home(self):
+    def start_home(self, retry=False):
         names = list(self.get_parameter('home_joint_names').value)
         positions = [float(value) for value in self.get_parameter('home_positions').value]
         if len(names) != len(positions) or not names:
             self.report('STOP_FAILED: invalid folded HOME joint configuration')
-            return
+            return False
         if not all(name in self.joints for name in names):
             self.report('STOP_FAILED: joint feedback unavailable for folded HOME return')
-            return
+            return False
         if not all(math.isfinite(value) for value in positions):
             self.report('STOP_FAILED: folded HOME positions are not finite')
-            return
+            return False
         trajectory = JointTrajectory(joint_names=names)
         point = JointTrajectoryPoint(positions=positions)
         duration = max(0.02, float(self.get_parameter('home_move_duration').value))
@@ -571,10 +1156,18 @@ class SortingOrchestrator(Node):
         self.home_goal = dict(zip(names, positions))
         self.home_started = self.get_clock().now()
         self.home_stable_since = None
+        if not retry:
+            self.home_retry_count = 0
         self.parking = True
-        self.report(
-            'PARKING: returning OMX to folded bringup HOME '
-            '[0, -1.57, 1.57, 1.57, 0]')
+        if retry:
+            self.report(
+                f'RESETTING: folded HOME trim retry {self.home_retry_count}/'
+                f'{int(self.get_parameter("reset_home_retry_limit").value)}')
+        else:
+            self.report(
+                'PARKING: returning OMX to folded bringup HOME '
+                '[0, -1.57, 1.57, 1.57, 0]')
+        return True
 
     def update_home(self):
         if not self.parking or self.home_goal is None:
@@ -586,25 +1179,50 @@ class SortingOrchestrator(Node):
             for name, goal in self.home_goal.items()
         ]
         maximum = max(errors)
-        if elapsed > float(self.get_parameter('home_timeout').value):
+        if elapsed > float(self.get_parameter("home_timeout").value):
+            retry_limit = int(self.get_parameter("reset_home_retry_limit").value)
+            if self.reset_active and self.home_retry_count < retry_limit:
+                self.home_retry_count += 1
+                self.report(
+                    f'RESETTING: folded HOME near-target timeout; maximum joint '
+                    f'error={math.degrees(maximum):.2f}deg; trim retry '
+                    f'{self.home_retry_count}/{retry_limit}')
+                if not self.start_home(retry=True):
+                    self.parking = False
+                    self.reset_active = False
+                    self.report('RESET_FAILED: unable to start folded HOME trim retry')
+                return
             self.parking = False
-            self.report(
-                f'STOP_FAILED: folded HOME timeout; maximum joint error='
-                f'{math.degrees(maximum):.2f}deg')
+            if self.reset_active:
+                self.reset_active = False
+                self.report(
+                    f'RESET_FAILED: folded HOME timeout; maximum joint error='
+                    f'{math.degrees(maximum):.2f}deg; press 재설정 to retry')
+            else:
+                self.report(
+                    f'STOP_FAILED: folded HOME timeout; maximum joint error='
+                    f'{math.degrees(maximum):.2f}deg')
             return
-        if (maximum > float(self.get_parameter('home_joint_tolerance').value) or
-                elapsed < float(self.get_parameter('home_minimum_completion_time').value)):
+        if (maximum > float(self.get_parameter("home_joint_tolerance").value) or
+                elapsed < float(self.get_parameter("home_minimum_completion_time").value)):
             self.home_stable_since = None
             return
         if self.home_stable_since is None:
             self.home_stable_since = now
             return
         if ((now - self.home_stable_since).nanoseconds / 1e9 >=
-                float(self.get_parameter('home_settle_time').value)):
+                float(self.get_parameter("home_settle_time").value)):
             self.parking = False
-            self.report(
-                f'STOPPED: folded HOME reached; maximum joint error='
-                f'{math.degrees(maximum):.2f}deg')
+            self.home_retry_count = 0
+            if self.reset_active:
+                self.report(
+                    f'RESETTING: folded HOME reached; maximum joint error='
+                    f'{math.degrees(maximum):.2f}deg; opening gripper')
+                self.start_reset_gripper_cycle()
+            else:
+                self.report(
+                    f'STOPPED: folded HOME reached; maximum joint error='
+                    f'{math.degrees(maximum):.2f}deg')
 
 
 def main(args=None):

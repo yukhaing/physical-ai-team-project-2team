@@ -4,155 +4,34 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 CONTAINER_NAME="omx_box_project"
-STACK_DIR="/tmp/omx_gui_stack"
-STACK_LOG_DIR="/root/omx_box_project_ws/logs/gui_stack"
-ZENOHD_PID_FILE="/tmp/omx_zenohd.pid"
 
 show_help() {
-  echo "Usage: $0 {build|start|enter|stop|logs|status|gui-up|gui-down|gui-status}"
+  echo "Usage: $0 {build|start|enter|stop|logs|status|gui-up|gui-down|gui-status|gui-attach}"
 }
 
-start_container() {
-  if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
-    xhost +si:localuser:root >/dev/null || true
-  fi
-  docker compose -f "${COMPOSE_FILE}" up -d --build
-}
-
-run_in_container() {
-  docker exec "${CONTAINER_NAME}" bash -lc "$1"
-}
-
-ensure_ultralytics_venv() {
-  run_in_container "
-    /opt/ultralytics-venv/bin/python - <<'PY'
-import importlib
-import sys
-
-checks = {
-    'numpy': lambda m: int(m.__version__.split('.', 1)[0]) < 2,
-    'scipy': lambda m: True,
-    'PyQt5': lambda m: True,
-}
-
-for name, validator in checks.items():
-    try:
-        module = importlib.import_module(name)
-    except Exception:
-        sys.exit(1)
-    if not validator(module):
-        sys.exit(1)
-PY
-  " && return
-
-  echo "repairing /opt/ultralytics-venv for ROS compatibility"
-  run_in_container "
-    /opt/ultralytics-venv/bin/python -m pip install --no-cache-dir 'numpy<2' scipy PyQt5
-  "
-}
-
-start_component() {
-  local name="$1"
-  local command="$2"
-  local pid_file="${STACK_DIR}/${name}.pid"
-  local log_file="${STACK_LOG_DIR}/${name}.log"
-
-  run_in_container "mkdir -p '${STACK_DIR}' '${STACK_LOG_DIR}'"
-  run_in_container "
-    if [ -f '${pid_file}' ] && kill -0 \$(cat '${pid_file}') 2>/dev/null; then
-      echo '${name} already running'
-      exit 0
-    fi
-    rm -f '${pid_file}'
+gui_build() {
+  docker exec "${CONTAINER_NAME}" bash -lc '
+    set -e
     source /opt/ros/jazzy/setup.bash
     source /root/ros2_ws/install/setup.bash
-    if [ -f /root/omx_box_project_ws/install/setup.bash ]; then
-      source /root/omx_box_project_ws/install/setup.bash
-    fi
-    export PATH=/opt/ultralytics-venv/bin:\$PATH
-    nohup bash -lc \"${command}\" >'${log_file}' 2>&1 &
-    echo \$! > '${pid_file}'
-    echo started '${name}' pid=\$(cat '${pid_file}')
-  "
+    cd /root/omx_box_project_ws/omx
+    colcon build --base-paths src --symlink-install --packages-select omx_box_control
+  '
 }
 
-stop_component() {
-  local name="$1"
-  local pid_file="${STACK_DIR}/${name}.pid"
-
-  run_in_container "
-    if [ ! -f '${pid_file}' ]; then
-      echo '${name} not running'
-      exit 0
-    fi
-    pid=\$(cat '${pid_file}')
-    if kill -0 \"\$pid\" 2>/dev/null; then
-      kill \"\$pid\" || true
-      sleep 1
-      if kill -0 \"\$pid\" 2>/dev/null; then
-        kill -9 \"\$pid\" || true
-      fi
-      echo stopped '${name}' pid=\$pid
-    else
-      echo '${name} stale pid=\$pid'
-    fi
-    rm -f '${pid_file}'
-  "
-}
-
-status_component() {
-  local name="$1"
-  local pid_file="${STACK_DIR}/${name}.pid"
-
-  run_in_container "
-    if [ -f '${pid_file}' ] && kill -0 \$(cat '${pid_file}') 2>/dev/null; then
-      echo '${name}: running pid='\"\$(cat '${pid_file}')\"
-    else
-      echo '${name}: stopped'
-    fi
-  "
-}
-
-gui_up() {
-  start_container
-  ensure_ultralytics_venv
-  start_component \
-    "zenohd" \
-    "exec ros2 run rmw_zenoh_cpp rmw_zenohd"
-  sleep 2
-  start_component \
-    "omx_bringup" \
-    "exec ros2 launch open_manipulator_bringup omx_f.launch.py start_rviz:=false port_name:=/dev/ttyACM0"
-  sleep 2
-  start_component \
-    "movej_controller" \
-    "exec ros2 launch cyclo_motion_controller_ros omx_controller.launch.py controller_type:=movej start_interactive_marker:=false config_file:=/root/omx_box_project_ws/docker/config/omx_config_physical.yaml"
-  sleep 2
-  start_component \
-    "camera" \
-    "exec ros2 launch open_manipulator_bringup camera_usb_cam.launch.py name:=camera1 video_device:=/dev/video0"
-  sleep 2
-  start_component \
-    "integrated_console" \
-    "exec ros2 launch omx_box_control integrated_console.launch.py"
-  echo "GUI stack started"
-  echo "Use '$0 gui-status' to inspect each component"
-}
-
-gui_down() {
-  stop_component "integrated_console"
-  stop_component "camera"
-  stop_component "movej_controller"
-  stop_component "omx_bringup"
-  stop_component "zenohd"
-}
-
-gui_status() {
-  status_component "zenohd"
-  status_component "omx_bringup"
-  status_component "movej_controller"
-  status_component "camera"
-  status_component "integrated_console"
+gui_validate() {
+  docker exec "${CONTAINER_NAME}" bash -lc '
+    set -e
+    source /opt/ros/jazzy/setup.bash
+    source /root/ros2_ws/install/setup.bash
+    export PATH=/opt/ultralytics-venv/bin:$PATH
+    export YOLO_CONFIG_DIR=/tmp/Ultralytics
+    mkdir -p /tmp/Ultralytics
+    python -c "import cv_bridge, numpy, PyQt5, rclpy, ultralytics; assert int(numpy.__version__.split(chr(46))[0]) < 2; print(\"GUI Python dependencies: OK\")"
+    test -f /root/omx_box_project_ws/omx/models/best.pt
+    test -f /root/omx_box_project_ws/runtime/calibration/active.yaml
+    echo "GUI model and calibration: OK"
+  '
 }
 
 case "${1:-}" in
@@ -160,7 +39,10 @@ case "${1:-}" in
     docker compose -f "${COMPOSE_FILE}" build
     ;;
   start)
-    start_container
+    if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
+      xhost +si:localuser:root >/dev/null || true
+    fi
+    docker compose -f "${COMPOSE_FILE}" up -d --build
     ;;
   enter)
     docker exec -it "${CONTAINER_NAME}" bash
@@ -178,13 +60,35 @@ case "${1:-}" in
     docker compose -f "${COMPOSE_FILE}" ps
     ;;
   gui-up)
-    gui_up
+    if [ -n "${DISPLAY:-}" ] && command -v xhost >/dev/null 2>&1; then
+      xhost +si:localuser:root >/dev/null || true
+    fi
+    docker compose -f "${COMPOSE_FILE}" up -d --build
+    gui_build
+    gui_validate
+    docker exec \
+      -e OMX_PORT_NAME="${OMX_PORT_NAME:-auto}" \
+      -e UNLOAD_OMX_PORT_NAME="${UNLOAD_OMX_PORT_NAME:-}" \
+      -e AUTOMATIC_UNLOAD_OMX="${AUTOMATIC_UNLOAD_OMX:-false}" \
+      -e ENABLE_UNLOAD_OMX="${ENABLE_UNLOAD_OMX:-false}" \
+      -e ROS_DOMAIN_ID="${GUI_ROS_DOMAIN_ID:-31}" \
+      -e OMX_VIDEO_DEVICE="${OMX_VIDEO_DEVICE:-/dev/video0}" \
+      -e BEAGLE_MODE="${BEAGLE_MODE:-auto}" \
+      -e BEAGLE_TRIGGER_HOST="${BEAGLE_TRIGGER_HOST:-}" \
+      -e BEAGLE_TRIGGER_PORT="${BEAGLE_TRIGGER_PORT:-8765}" \
+      -e BEAGLE_STATUS_PORT="${BEAGLE_STATUS_PORT:-9000}" \
+      -e BEAGLE_LOCAL_MISSION_LAUNCH="${BEAGLE_LOCAL_MISSION_LAUNCH:-auto}" \
+      "${CONTAINER_NAME}" \
+      bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" start
     ;;
   gui-down)
-    gui_down
+    docker exec "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" stop
     ;;
   gui-status)
-    gui_status
+    docker exec "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" status
+    ;;
+  gui-attach)
+    docker exec -it "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" attach
     ;;
   *)
     show_help

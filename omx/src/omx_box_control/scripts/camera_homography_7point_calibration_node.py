@@ -104,8 +104,23 @@ class CameraHomography7PointCalibration(Node):
 
         projected = cv2.perspectiveTransform(
             image.reshape((-1, 1, 2)), matrix).reshape((-1, 2))
-        self.errors_mm = np.linalg.norm(
+        homography_errors_mm = np.linalg.norm(
             projected - self.reference_points, axis=1) * 1000.0
+        height, width = self.latest_image.shape[:2]
+        normalization = np.asarray(
+            [width / 2.0, height / 2.0, width / 2.0, height / 2.0])
+        cx, cy, sx, sy = normalization
+        u, v = (image[:, 0] - cx) / sx, (image[:, 1] - cy) / sy
+        design = np.column_stack((
+            np.ones(len(image)), u, v, u * u, u * v, v * v))
+        coefficients = np.linalg.lstsq(
+            design, self.reference_points, rcond=None)[0]
+        self.errors_mm = np.linalg.norm(
+            design @ coefficients - self.reference_points, axis=1) * 1000.0
+        quadratic_errors_mm = self.errors_mm.copy()
+        from scipy.spatial import Delaunay
+        triangles = Delaunay(image).simplices.astype(np.int32)
+        self.errors_mm = np.zeros(len(image), dtype=np.float64)
         self.homography = matrix
         self.collecting = False
 
@@ -120,6 +135,16 @@ class CameraHomography7PointCalibration(Node):
         storage.write('image_points', image)
         storage.write('reference_points_link0', self.reference_points)
         storage.write('reprojection_errors_mm', self.errors_mm.reshape((-1, 1)))
+        storage.write(
+            'homography_reprojection_errors_mm',
+            homography_errors_mm.reshape((-1, 1)))
+        storage.write('pixel_normalization', normalization.reshape((1, 4)))
+        storage.write('polynomial_coefficients', coefficients)
+        storage.write(
+            'quadratic_reprojection_errors_mm',
+            quadratic_errors_mm.reshape((-1, 1)))
+        storage.write('piecewise_triangles', triangles)
+        storage.write('coordinate_model', 'piecewise_affine_v1')
         storage.release()
         os.replace(temporary_file, self.output_file)
 

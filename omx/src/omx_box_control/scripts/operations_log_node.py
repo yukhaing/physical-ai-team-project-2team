@@ -17,6 +17,7 @@ FAILURE_LABELS = {
     'beagle_disconnected': 'Beagle 연결 끊김',
     'beagle_operation_failed': 'Beagle 동작 실패',
     'omx_operation_failed': 'OMX 동작 실패',
+    'unload_omx_failed': '하역 OMX 동작 실패',
 }
 
 
@@ -62,7 +63,13 @@ class OperationsLog(Node):
             event = json.loads(message.data)
         except json.JSONDecodeError:
             return
-        if event.get('event') == 'awaiting_operator_unload':
+        event_name = event.get('event')
+        if (event_name in ('awaiting_operator_unload', 'return_completed') and
+                not event.get('job_id')):
+            self.get_logger().warning(
+                f'Ignoring {event_name} event without a job_id')
+            return
+        if event_name == 'awaiting_operator_unload':
             timestamp = datetime.now(timezone.utc).astimezone().strftime(
                 '%Y-%m-%d %H:%M:%S')
             label = 'defect'
@@ -74,10 +81,7 @@ class OperationsLog(Node):
                     event.get('y'), event.get('robot_x'), event.get('robot_y'),
                     'defect_loading', 'placed_waiting_operator', 'pending'))
             self.db.commit()
-            # Keep the operator view deliberately compact and Korean-only.
-            self.recent_pub.publish(String(data=json.dumps({
-                'time': timestamp[-8:], 'status': '성공'})))
-        elif event.get('event') == 'cycle_failed':
+        elif event_name == 'cycle_failed':
             timestamp = datetime.now(timezone.utc).astimezone().strftime(
                 '%Y-%m-%d %H:%M:%S')
             self.db.execute('''INSERT OR REPLACE INTO operations
@@ -93,10 +97,25 @@ class OperationsLog(Node):
             self.db.commit()
             self.recent_pub.publish(String(data=json.dumps({
                 'time': timestamp[-8:], 'status': failure_label(event)})))
-        elif event.get('event') == 'return_completed':
-            self.db.execute('UPDATE operations SET beagle_return_result = ? WHERE job_id = ?',
-                            ('completed', event['job_id']))
+        elif event_name == 'return_completed':
+            row = self.db.execute(
+                'SELECT beagle_return_result FROM operations WHERE job_id = ?',
+                (event['job_id'],)).fetchone()
+            # Ignore a stale/duplicate status.  This also guarantees that one
+            # physical return produces exactly one GUI success entry.
+            if row is None or row[0] == 'completed':
+                return
+            timestamp = datetime.now(timezone.utc).astimezone().strftime(
+                '%Y-%m-%d %H:%M:%S')
+            self.db.execute(
+                '''UPDATE operations
+                   SET completed_at = ?, beagle_return_result = ?
+                   WHERE job_id = ?''',
+                (timestamp, 'completed', event['job_id']))
             self.db.commit()
+            # Keep the operator view deliberately compact and Korean-only.
+            self.recent_pub.publish(String(data=json.dumps({
+                'time': timestamp[-8:], 'status': '성공'})))
 
 
 def main(args=None):

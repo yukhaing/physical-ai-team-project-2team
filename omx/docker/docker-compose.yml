@@ -30,7 +30,7 @@ services:
       - /dev/shm:/dev/shm
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
-      - ../:/root/omx_box_project_ws
+      - ../../:/root/omx_box_project_ws
       - omx_box_build:/root/omx_box_project_ws/build
       - omx_box_install:/root/omx_box_project_ws/install
       - omx_box_log:/root/omx_box_project_ws/log
