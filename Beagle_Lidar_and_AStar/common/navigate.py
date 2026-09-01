@@ -93,7 +93,14 @@ CHECKPOINT_SETTLE_S = 0.1
 # every loop tick, not this conversion, so an imperfect calibration here
 # doesn't bias the position estimate, only how smoothly it tracks the path.
 MPS_PER_PERCENT = 0.00335
-DRIVE_PERCENT_CAP = 15.0
+# Raised from 15.0 (2026-09-01) alongside drive_with_localization()'s
+# speed_mps default (0.03 -> 0.045) to speed up zone-to-zone travel. This cap
+# wasn't actually the limiting factor at the old speed_mps=0.03 (max_wheel_mps
+# = 15.0*0.00335 = 0.050m/s, well above 0.03) -- it only matters when
+# pure_pursuit_command() needs one wheel faster than the other mid-turn, so it
+# still needs headroom above the new cruise speed for that, not just to match
+# it. 20.0 -> max_wheel_mps=0.067m/s, comfortable margin over 0.045.
+DRIVE_PERCENT_CAP = 20.0
 CONTROL_DT_S = 0.15
 
 
@@ -285,7 +292,7 @@ def _path_hits_rects(path: list[Point], rects: list[Rect], margin_m: float = 0.0
 
 def drive_with_localization(
     hw, path: list[Point], start_pose: Pose2D, distance_field: DistanceField,
-    speed_mps: float = 0.03, lookahead_m: float = 0.15, goal_tolerance_m: float = 0.03,
+    speed_mps: float = 0.045, lookahead_m: float = 0.15, goal_tolerance_m: float = 0.03,
     max_time_s: float = 90.0, localize_interval_s: float = LOCALIZE_INTERVAL_S,
     localize_search_radius_m: float = LOCALIZE_SEARCH_RADIUS_M, localize_theta_steps: int = LOCALIZE_THETA_STEPS,
     boundary_w_m: float | None = None, boundary_h_m: float | None = None,
