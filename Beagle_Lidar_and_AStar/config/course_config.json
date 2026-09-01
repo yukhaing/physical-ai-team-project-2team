@@ -5,7 +5,9 @@
     "y_m": 0.70
   },
   "zones": {
-    "receiving": {"x_m": 0.35, "y_m": 0.34},
-    "defect": {"x_m": 0.73, "y_m": 0.135}
-  }
+    "receiving": {"x_m": 0.35, "y_m": 0.34, "heading_deg": 0.0},
+    "defect": {"x_m": 0.73, "y_m": 0.135, "heading_deg": 180.0,
+               "exclude_deg_range": [-140, -40]}
+  },
+  "_exclude_deg_range_note": "Optional per-zone [start_deg, end_deg] window (0deg = the direction the zone's reference scan was captured facing, +ve = counter-clockwise -- see common/scan_align.py's mask_from_angle_range()) excluded from scan matching at that zone. defect's OMX arm sits roughly -90deg (robot's right, facing 9 o'clock) from the robot and doesn't hold a fixed position between visits, so a wide margin around it is masked out -- matching relies only on the room's static wall geometry there. Widen/narrow/re-aim this if find_pose() at defect still shows elevated match_err, or re-derive it if the arm's physical placement changes."
 }
