@@ -13,14 +13,16 @@ from common.scan_align import best_rotation_offset, estimate_pose_offset, mask_f
 # isn't a perfectly precise physical pivot, so the live heading reading
 # itself has some real jitter beyond pure grid quantization. Raised to 6.0
 # for more margin against that same jitter.
-REALIGN_TOL_DEG = 4.0
+REALIGN_TOL_DEG = 6.0
 REALIGN_MAX_ITERS = 30
 # Lowered from 10.0 (2026-09-02) to move slower/more precisely during
 # alignment at a zone (find_pose()/find_pose_via_map()/realign_heading()) --
-# separate from drive_with_localization()'s cruise speed, which stays fast
-# for the zone-to-zone leg itself. Slower turns should reduce the
-# overshoot/skid that's been a repeated source of oscillation this session.
-REALIGN_TURN_PERCENT = 7.0
+# separate from drive_with_localization()'s cruise speed (10%,
+# common/navigate.py), which stays faster for the zone-to-zone leg itself.
+# Slower turns should reduce the overshoot/skid that's been a repeated
+# source of oscillation this session. Matched to POSITION_DRIVE_PERCENT
+# below (8.0) so every alignment-phase move uses the same speed.
+REALIGN_TURN_PERCENT = 7.5
 # Rough estimate only (wheel_percent -> deg/s) -- exact rate doesn't matter much
 # since every step re-measures the true heading with LiDAR afterward instead of
 # trusting this number; it only affects how many iterations convergence takes.
@@ -61,7 +63,7 @@ MAX_TURN_STEPS = 20
 # and a hard cap on steps stop it from thrashing; residual heading error left
 # over just shows up as a bit of lateral drift in the drive, which the outer
 # find_pose() loop catches next iteration anyway.
-POSITION_TURN_TOL_DEG = 8.0
+POSITION_TURN_TOL_DEG = 7.5
 POSITION_TURN_MAX_STEPS = 6
 
 # Chasing 1cm needs several correction cycles, each requiring several small
@@ -105,7 +107,7 @@ POSITION_TURN_MAX_STEPS = 6
 POSITION_TOL_M = 0.015
 # Lowered from 10.0 (2026-09-02) alongside REALIGN_TURN_PERCENT above, same
 # reasoning -- slower, more precise short drives during position correction.
-POSITION_DRIVE_PERCENT = 8.0
+POSITION_DRIVE_PERCENT = 7.5
 
 # estimate_pose_offset()'s linearization only holds for small rotation (roughly
 # +/-10-15deg). If best_rotation_offset() (robust for any angle) says heading is
@@ -310,6 +312,7 @@ def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
     return False
 
 
+
 # Search radius/resolution for find_pose_via_map() below -- wider and finer
 # than drive_with_localization()'s periodic in-transit checks
 # (LOCALIZE_SEARCH_RADIUS_M=0.05, theta_steps=90 in common/navigate.py),
@@ -336,11 +339,19 @@ MAP_POSITION_SEARCH_RADIUS_M = 0.15
 # which matters since find_pose_via_map() typically takes a few iterations
 # to converge.
 MAP_THETA_STEPS = 180
+# Caps a single turn_by_angle() call in find_pose_via_map()'s heading-only
+# correction branch (see there for the full reasoning) -- confirmed
+# 2026-09-02 that an uncapped 176deg single turn overshot by ~32deg on real
+# hardware. 90deg is generous enough that most real corrections still take
+# just one step, while a near-180deg correction takes two (each re-measured
+# by the outer loop) instead of betting everything on one large,
+# gyro-only-verified spin.
+MAP_MAX_SINGLE_TURN_RAD = math.radians(90.0)
 
 
 def find_pose_via_map(
     hw, distance_field: DistanceField, target_x: float, target_y: float, target_heading_rad: float,
-    max_iters: int = 8, search_radius_m: float = MAP_POSITION_SEARCH_RADIUS_M, theta_steps: int = MAP_THETA_STEPS,
+    max_iters: int = 12, search_radius_m: float = MAP_POSITION_SEARCH_RADIUS_M, theta_steps: int = MAP_THETA_STEPS,
     heading_tol_rad: float | None = None, position_tol_m: float = POSITION_TOL_M,
 ) -> bool:
     """Alternative to find_pose() for heading+position alignment, built around
@@ -366,10 +377,28 @@ def find_pose_via_map(
     needed either, since a non-static element like the OMX arm only
     contaminates a few of the many map points, not the whole comparison.
 
-    Returns True if it converges within max_iters."""
+    Requires TWO CONSECUTIVE scans within tolerance before declaring done, not
+    just one -- confirmed 2026-09-02: a mission run converged and reported
+    position_err=1.0cm, but a fresh standalone check moments later (robot
+    physically untouched in between) read 2.2cm at the very same spot --
+    i.e. scan-to-scan measurement noise here is comparable to the tolerance
+    itself, so a single lucky low reading isn't strong enough evidence on its
+    own. The second confirming scan is taken without moving (a real
+    correction move only happens after a check FAILS), so it's a genuine
+    repeat measurement of the same physical pose, not a new target.
+
+    `max_iters` raised 8 -> 12 (2026-09-02) alongside the heading-only turn
+    cap above: a large initial correction now takes 2+ iterations to work
+    through instead of 1, and reaching tolerance for the first time still
+    needs a second confirming iteration on top of that -- 8 wasn't always
+    enough headroom for both (confirmed: one run reached tolerance exactly on
+    iteration 7/8, the last one, with no iteration left for the confirm).
+
+    Returns True if it converges (twice in a row) within max_iters."""
     if heading_tol_rad is None:
         heading_tol_rad = math.radians(REALIGN_TOL_DEG)
     guess_x, guess_y = target_x, target_y
+    consecutive_ok = 0
     for i in range(max_iters):
         time.sleep(SETTLE_S)
         scan = hw.scan()
@@ -386,8 +415,14 @@ def find_pose_via_map(
               f"heading_err={math.degrees(dtheta):+.1f}deg position_err={pos_err_m * 100:.1f}cm")
 
         if abs(dtheta) <= heading_tol_rad and pos_err_m <= position_tol_m:
-            print("[pose-map] heading and position both within tolerance, done.")
-            return True
+            consecutive_ok += 1
+            if consecutive_ok >= 2:
+                print("[pose-map] heading and position within tolerance on 2 consecutive checks, done.")
+                return True
+            print(f"  within tolerance ({consecutive_ok}/2 consecutive) -- re-scanning to confirm, no move.")
+            guess_x, guess_y = localized.x, localized.y
+            continue
+        consecutive_ok = 0
 
         if pos_err_m > position_tol_m:
             # World-frame direction from the robot's actual (localized)
@@ -408,8 +443,22 @@ def find_pose_via_map(
             print(f"  drove {driven * 100:.1f}cm toward target (pose re-checked next scan)")
             guess_x, guess_y = target_x, target_y  # expect to be near the target now
         else:
-            hw.turn_by_angle(dtheta, turn_percent=REALIGN_TURN_PERCENT)
-            print(f"  heading-only turn {math.degrees(dtheta):+.1f}deg")
+            # Cap the single commanded turn -- unlike the position branch
+            # above (whose forward/backward choice keeps `needed` under
+            # 90deg by construction), `dtheta` here can be up to 180deg, and
+            # turn_by_angle() is gyro-only with no LiDAR check until it's
+            # done. Confirmed 2026-09-02: a single 176deg commanded turn
+            # landed ~32deg off target on real hardware, and that error then
+            # needed its own correction, causing oscillation instead of
+            # convergence. Capping means a very large correction takes 2+
+            # outer-loop iterations instead of 1 -- each already re-scans
+            # and re-measures from scratch, so this is a smaller, safer
+            # version of the chunked-turn approach tried and reverted
+            # earlier (that one added a whole extra re-verify sub-loop per
+            # step; this just bounds what a single step can ask for).
+            step = dtheta if abs(dtheta) <= MAP_MAX_SINGLE_TURN_RAD else math.copysign(MAP_MAX_SINGLE_TURN_RAD, dtheta)
+            hw.turn_by_angle(step, turn_percent=REALIGN_TURN_PERCENT)
+            print(f"  heading-only turn {math.degrees(step):+.1f}deg (needed {math.degrees(dtheta):+.1f}deg)")
             guess_x, guess_y = localized.x, localized.y  # position unchanged by a pure turn
 
     print("[pose-map] max iterations reached without converging.")

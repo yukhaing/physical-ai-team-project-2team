@@ -13,19 +13,27 @@ from common.obstacles import detect_obstacle_points, obstacle_rects_from_points
 from common.planning import Point, Rect, astar_path, pure_pursuit_command, pure_pursuit_target
 from common.scan_align import mask_from_angle_range
 
-# How often (wall-clock seconds) drive_with_localization() pauses to correct
-# against the fixed map via common/mapping.py's localize_from_map() --
-# continuous odometry runs every control tick in between (integrate_real_dead_reckoning()),
-# this just bounds how far it can drift before the next correction. Tuned
+# How often drive_with_localization() pauses to correct against the fixed
+# map via common/mapping.py's localize_from_map() -- continuous odometry
+# runs every control tick in between (integrate_real_dead_reckoning()), this
+# just bounds how far it can drift before the next correction. Tuned
 # 2026-08-31 once localize_from_map() got fast (~0.65s/call, DistanceField) --
-# not practical at ~80s/call. Raised from 1.5 to 3.0 (2026-09-01) to cut the
-# number of stop-scan-resume interruptions roughly in half for smoother
-# driving -- real-hardware corrections at 1.5s intervals were consistently
-# small (~1-5cm, ~1-5deg per checkpoint, see mission logs), so doubling the
-# gap between corrections shouldn't let drift grow past what the 5cm search
-# radius below can still recover.
-LOCALIZE_INTERVAL_S = 3.0
-LOCALIZE_SEARCH_RADIUS_M = 0.05  # only needs to cover drift since the LAST correction, not a cold search
+# not practical at ~80s/call. Originally wall-clock time based (every
+# LOCALIZE_INTERVAL_S), raised 1.5 -> 3.0 -> 6.0s over 2026-09-01/02 to cut
+# stop-scan-resume interruptions for smoother driving.
+#
+# Switched to path-PROGRESS based (2026-09-02): a fixed time interval fires
+# a variable, unpredictable number of times depending on leg length/speed.
+# `LOCALIZE_PROGRESS_FRACTIONS` instead fires at fixed fractions of the
+# leg's remaining distance -- (0.5, 0.15) means once at the midpoint and
+# once near arrival (85% of the way there), every leg, regardless of its
+# length or speed_mps. Combined with find_pose_via_map()'s final alignment
+# at the zone afterward, that's a predictable 3 corrections per leg: middle,
+# just-before-arrival, and after-arrival. Widened the search radius below
+# alongside this (0.05 -> 0.08) since fewer, more widely-spaced checkpoints
+# mean more drift for a single checkpoint to catch.
+LOCALIZE_PROGRESS_FRACTIONS = (0.5, 0.15)
+LOCALIZE_SEARCH_RADIUS_M = 0.08  # only needs to cover drift since the LAST correction, not a cold search
 LOCALIZE_THETA_STEPS = 90
 # This room is a rectangle (180deg rotational symmetry) -- a full-circle
 # theta search can occasionally lock onto the exact 180deg-flipped heading
@@ -33,8 +41,8 @@ LOCALIZE_THETA_STEPS = 90
 # from any single asymmetric feature (confirmed 2026-09-01: a live mission
 # run's heading flipped ~170deg in one localize_from_map() call mid-drive,
 # and the robot then drove on that wrong belief). Odometry only drifts a few
-# degrees between corrections (see LOCALIZE_INTERVAL_S above), so it's a
-# trustworthy-enough prior to search a window around instead of the full
+# degrees between corrections (see LOCALIZE_PROGRESS_FRACTIONS above), so
+# it's a trustworthy-enough prior to search a window around instead of the full
 # circle -- wide enough (90deg) to still catch a real, larger heading error,
 # narrow enough that the 180deg-away candidate is never even considered.
 LOCALIZE_THETA_WINDOW_DEG = 90.0
@@ -292,21 +300,28 @@ def _path_hits_rects(path: list[Point], rects: list[Rect], margin_m: float = 0.0
 
 def drive_with_localization(
     hw, path: list[Point], start_pose: Pose2D, distance_field: DistanceField,
-    speed_mps: float = 0.045, lookahead_m: float = 0.15, goal_tolerance_m: float = 0.03,
-    max_time_s: float = 90.0, localize_interval_s: float = LOCALIZE_INTERVAL_S,
+    speed_mps: float = 14.0 * MPS_PER_PERCENT, lookahead_m: float = 0.15, goal_tolerance_m: float = 0.03,
+    max_time_s: float = 90.0, localize_progress_fractions: tuple[float, ...] = LOCALIZE_PROGRESS_FRACTIONS,
     localize_search_radius_m: float = LOCALIZE_SEARCH_RADIUS_M, localize_theta_steps: int = LOCALIZE_THETA_STEPS,
     boundary_w_m: float | None = None, boundary_h_m: float | None = None,
     known_obstacles: list[Rect] | None = None,
 ) -> tuple[Pose2D, bool]:
-    """Continuous pure-pursuit drive with periodic map-based localization,
-    matching this session's chosen architecture: continuous odometry
-    (encoder+gyro dead-reckoning, integrate_real_dead_reckoning(), every
-    control tick) PLUS periodic LiDAR localization against the fixed map
-    (common/mapping.py's localize_from_map(), roughly every
-    `localize_interval_s`) -- neither alone. The map (`distance_field`, see
-    scripts/08_build_map.py) is built once ahead of time and never updated
-    here, so this carries none of continuous SLAM's self-referential
-    feedback-loop risk.
+    """Continuous pure-pursuit drive with map-based localization at fixed
+    points along the way, matching this session's chosen architecture:
+    continuous odometry (encoder+gyro dead-reckoning,
+    integrate_real_dead_reckoning(), every control tick) PLUS LiDAR
+    localization against the fixed map (common/mapping.py's
+    localize_from_map()) at each fraction of remaining distance in
+    `localize_progress_fractions` -- neither alone. The map
+    (`distance_field`, see scripts/08_build_map.py) is built once ahead of
+    time and never updated here, so this carries none of continuous SLAM's
+    self-referential feedback-loop risk.
+
+    `localize_progress_fractions` defaults to (0.5, 0.15) -- a checkpoint at
+    the leg's midpoint and another near arrival (85% of the way there),
+    regardless of the leg's length or speed_mps (unlike a wall-clock
+    interval, which fires an unpredictable number of times depending on
+    those). Pass an empty tuple to disable in-transit checkpoints entirely.
 
     `localize_search_radius_m` only needs to cover how far odometry could have
     drifted since the LAST correction (not a cold, room-wide search), which is
@@ -332,8 +347,9 @@ def drive_with_localization(
     hw.encoder_delta_m()  # reset the running baseline before starting to move
     start_time = time.monotonic()
     previous = start_time
-    last_localize = start_time
     goal = path[-1]
+    total_distance = start_pose.distance_to(*goal)
+    next_checkpoint_idx = 0
     obstacles = list(known_obstacles) if known_obstacles is not None else None
     try:
         while time.monotonic() - start_time < max_time_s:
@@ -352,7 +368,12 @@ def drive_with_localization(
             print(f"  [odom] pos=({pose.x:.3f},{pose.y:.3f}) heading={math.degrees(pose.theta):.1f}deg "
                   f"dist_to_goal={pose.distance_to(*goal) * 100:.1f}cm")
 
-            if now - last_localize >= localize_interval_s:
+            due_checkpoint = (
+                next_checkpoint_idx < len(localize_progress_fractions)
+                and pose.distance_to(*goal) <= total_distance * localize_progress_fractions[next_checkpoint_idx]
+            )
+            if due_checkpoint:
+                next_checkpoint_idx += 1
                 hw.stop()
                 time.sleep(CHECKPOINT_SETTLE_S)
                 scan = hw.scan()
@@ -368,8 +389,7 @@ def drive_with_localization(
                       f"heading={math.degrees(localized.theta):.1f}deg match_err={match_err * 1000:.0f}mm "
                       f"(odometry was off by {dx_cm:+.1f},{dy_cm:+.1f}cm,{dtheta_deg:+.1f}deg)")
                 pose = localized
-                last_localize = time.monotonic()
-                previous = last_localize
+                previous = time.monotonic()  # exclude the stopped checkpoint time from the next dt
 
                 if obstacles is not None:
                     known_segments = (
