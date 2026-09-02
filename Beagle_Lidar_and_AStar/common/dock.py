@@ -13,7 +13,7 @@ from common.scan_align import best_rotation_offset, estimate_pose_offset, mask_f
 # isn't a perfectly precise physical pivot, so the live heading reading
 # itself has some real jitter beyond pure grid quantization. Raised to 6.0
 # for more margin against that same jitter.
-REALIGN_TOL_DEG = 6.0
+REALIGN_TOL_DEG = 6.5
 REALIGN_MAX_ITERS = 30
 # Lowered from 10.0 (2026-09-02) to move slower/more precisely during
 # alignment at a zone (find_pose()/find_pose_via_map()/realign_heading()) --
