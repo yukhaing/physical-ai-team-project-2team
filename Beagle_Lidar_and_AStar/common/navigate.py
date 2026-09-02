@@ -523,6 +523,7 @@ def goto_zone(
         print(f"[align] final precise alignment at {to_name} via find_pose_via_map()...")
         converged = find_pose_via_map(
             hw, distance_field, to_zone["x_m"], to_zone["y_m"], math.radians(to_zone["heading_deg"]),
+            initial_heading_rad=arrival_pose.theta,
         )
         print("RESULT:", f"arrived and converged at {to_name}" if converged
               else f"drove to {to_name} but did NOT fully converge there -- see log above")

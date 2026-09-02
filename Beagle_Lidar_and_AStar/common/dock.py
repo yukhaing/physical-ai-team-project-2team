@@ -34,9 +34,12 @@ REALIGN_TURN_RATE_DEG_PER_S = 35.0
 # mission (scripts/10) kept landing on match_err 150-340mm regardless,
 # settle time on top or not -- so settle time was not the real fix for that,
 # just added real seconds per correction step for no consistent benefit.
-# Kept modestly above the original 0.15 rather than a full revert, since a
-# short pause after stopping is still cheap and can't hurt.
-SETTLE_S = 0.3  # pause after stopping before trusting a scan
+# Backed off to the original 0.15 (2026-09-02, per explicit request to speed
+# up find_pose_via_map()'s per-iteration "drove ... (pose re-checked next
+# scan)" cadence) -- match_err has stayed in the same healthy 7-22mm range
+# on real hardware at both 0.3 and 0.15, so the extra 0.15s wasn't buying
+# measurable match quality, just added latency per correction step.
+SETTLE_S = 0.15  # pause after stopping before trusting a scan
 
 # turn_by_angle() is only gyro-verified while it's turning, with no LiDAR check
 # until it's done -- for a single large continuous spin, real motor/wheel
@@ -63,7 +66,7 @@ MAX_TURN_STEPS = 20
 # and a hard cap on steps stop it from thrashing; residual heading error left
 # over just shows up as a bit of lateral drift in the drive, which the outer
 # find_pose() loop catches next iteration anyway.
-POSITION_TURN_TOL_DEG = 7.5
+POSITION_TURN_TOL_DEG = 7
 POSITION_TURN_MAX_STEPS = 6
 
 # Chasing 1cm needs several correction cycles, each requiring several small
@@ -104,10 +107,10 @@ POSITION_TURN_MAX_STEPS = 6
 # one needed a real reorientation). If oscillation reappears on a
 # non-axis-aligned residual, back off toward 0.02-0.025 again rather than
 # assuming this case generalizes.
-POSITION_TOL_M = 0.015
+POSITION_TOL_M = 0.02
 # Lowered from 10.0 (2026-09-02) alongside REALIGN_TURN_PERCENT above, same
 # reasoning -- slower, more precise short drives during position correction.
-POSITION_DRIVE_PERCENT = 7.5
+POSITION_DRIVE_PERCENT = 7
 
 # estimate_pose_offset()'s linearization only holds for small rotation (roughly
 # +/-10-15deg). If best_rotation_offset() (robust for any angle) says heading is
@@ -312,7 +315,6 @@ def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
     return False
 
 
-
 # Search radius/resolution for find_pose_via_map() below -- wider and finer
 # than drive_with_localization()'s periodic in-transit checks
 # (LOCALIZE_SEARCH_RADIUS_M=0.05, theta_steps=90 in common/navigate.py),
@@ -338,16 +340,7 @@ MAP_POSITION_SEARCH_RADIUS_M = 0.15
 # per-call cost (~1.34s -> ~0.62s measured against real captured data),
 # which matters since find_pose_via_map() typically takes a few iterations
 # to converge.
-#
-# Backed off further to 90 (2026-09-02): with the heading-only turn now
-# capped (MAP_MAX_SINGLE_TURN_RAD below) and REALIGN_TOL_DEG at 6.0, 90
-# steps = 4deg/step is still comfortably (1.5x) finer than tolerance, and a
-# full real-hardware mission (4 round trips, dynamic obstacles included)
-# converged reliably at this resolution. Halves per-call search cost again
-# (~0.62s -> ~0.33s) on top of the 360->180 cut -- matters more here than
-# find_pose_via_map()'s target-heading precision does, since find_pose_via_map()
-# typically needs 5-9 iterations per leg to converge and each one pays this cost.
-MAP_THETA_STEPS = 90
+MAP_THETA_STEPS = 180
 # Caps a single turn_by_angle() call in find_pose_via_map()'s heading-only
 # correction branch (see there for the full reasoning) -- confirmed
 # 2026-09-02 that an uncapped 176deg single turn overshot by ~32deg on real
@@ -357,11 +350,31 @@ MAP_THETA_STEPS = 90
 # gyro-only-verified spin.
 MAP_MAX_SINGLE_TURN_RAD = math.radians(90.0)
 
+# Window (see common/mapping.py's localize_from_map() theta_center/theta_range)
+# for find_pose_via_map()'s OWN search -- added 2026-09-02: confirmed on real
+# hardware (GOTO_RECEIVING's final alignment) that a full 360deg search here
+# can hop between several similarly-scoring heading candidates call to call
+# even though match_err looks good on every one of them (11-17mm) and
+# position_err stays small (1-3cm) throughout -- heading_err bounced between
+# near-0deg (the true value, matching the drive phase's own tracked arrival
+# heading) and 30/38/74/134deg repeatedly, never settling within max_iters.
+# drive_with_localization()'s periodic checkpoint already avoids this exact
+# failure mode via a theta window centered on a trusted odometry prior (see
+# LOCALIZE_THETA_WINDOW_DEG in common/navigate.py) -- this mirrors that here,
+# using goto_zone()'s own arrival_pose.theta as the initial prior (that's
+# already odometry+periodic-map-corrected, so it's normally within a few tens
+# of degrees of true, unlike target_heading_rad itself: arrival heading can
+# legitimately be 100-150deg away from the zone's target heading, see
+# course_config.json's "_receiving_heading_note", so centering on the target
+# instead would exclude the true candidate from the window entirely).
+MAP_HEADING_WINDOW_DEG = 120.0
+
 
 def find_pose_via_map(
     hw, distance_field: DistanceField, target_x: float, target_y: float, target_heading_rad: float,
     max_iters: int = 12, search_radius_m: float = MAP_POSITION_SEARCH_RADIUS_M, theta_steps: int = MAP_THETA_STEPS,
     heading_tol_rad: float | None = None, position_tol_m: float = POSITION_TOL_M,
+    initial_heading_rad: float | None = None, heading_window_deg: float = MAP_HEADING_WINDOW_DEG,
 ) -> bool:
     """Alternative to find_pose() for heading+position alignment, built around
     common/mapping.py's localize_from_map() (wide-radius grid+360deg search
@@ -396,17 +409,48 @@ def find_pose_via_map(
     correction move only happens after a check FAILS), so it's a genuine
     repeat measurement of the same physical pose, not a new target.
 
-    `max_iters` raised 8 -> 12 (2026-09-02) alongside the heading-only turn
-    cap above: a large initial correction now takes 2+ iterations to work
-    through instead of 1, and reaching tolerance for the first time still
-    needs a second confirming iteration on top of that -- 8 wasn't always
-    enough headroom for both (confirmed: one run reached tolerance exactly on
-    iteration 7/8, the last one, with no iteration left for the confirm).
+    `max_iters` raised 8 -> 12 (2026-09-02): receiving's alignment now
+    converges via a genuine multi-step spiral through the heading-window
+    (see MAP_HEADING_WINDOW_DEG above) instead of jumping straight there --
+    confirmed on real hardware needing 6-9 iterations for that spiral plus
+    the 2-in-a-row confirmation on top, and one run reached heading_err
+    -2deg / position_err 2.2cm (a single iteration from done) right as
+    max_iters=8 ran out.
+
+    `initial_heading_rad`/`heading_window_deg`: search only `heading_window_deg`
+    (120deg default) centered on a tracked heading prior instead of the full
+    360deg circle -- see MAP_HEADING_WINDOW_DEG above for why (a full-circle
+    search here was confirmed to hop between several similarly-scoring
+    heading candidates, never converging). Seed `initial_heading_rad` with
+    goto_zone()'s own arrival_pose.theta (the drive phase's own
+    odometry+map-corrected heading estimate) rather than leaving it at the
+    default (falls back to target_heading_rad, only appropriate for a cold
+    start with no better prior) -- arrival heading can legitimately be
+    100-150deg away from the zone's target heading, so a window centered on
+    the target would wrongly exclude the true candidate. The tracked prior
+    updates every iteration to the heading actually just commanded (or
+    measured, when no turn happened), same pattern as guess_x/guess_y below.
 
     Returns True if it converges (twice in a row) within max_iters."""
     if heading_tol_rad is None:
         heading_tol_rad = math.radians(REALIGN_TOL_DEG)
     guess_x, guess_y = target_x, target_y
+    # No real prior without initial_heading_rad -- falling back to
+    # target_heading_rad while STILL narrowing the window would be worse
+    # than the un-windowed original (confirmed 2026-09-02,
+    # scripts/04c_find_pose_via_map.py --zone receiving: robot's actual
+    # heading was well outside a target-centered 120deg window, so the
+    # search could never even consider the true candidate and wandered
+    # indefinitely within the wrong region instead). Only narrow the search
+    # when the caller actually supplies a trustworthy prior (e.g.
+    # goto_zone()'s arrival_pose.theta) -- otherwise search the full circle,
+    # same as before this window was added.
+    if initial_heading_rad is None:
+        guess_theta = target_heading_rad
+        heading_range_rad = 2.0 * math.pi
+    else:
+        guess_theta = initial_heading_rad
+        heading_range_rad = math.radians(heading_window_deg)
     consecutive_ok = 0
     for i in range(max_iters):
         time.sleep(SETTLE_S)
@@ -414,6 +458,7 @@ def find_pose_via_map(
         localized, match_err = localize_from_map(
             scan, distance_field, guess_x, guess_y,
             pos_search_radius_m=search_radius_m, theta_steps=theta_steps,
+            theta_center=guess_theta, theta_range=heading_range_rad,
         )
         dtheta = wrap_angle(target_heading_rad - localized.theta)
         dx = target_x - localized.x
@@ -430,6 +475,7 @@ def find_pose_via_map(
                 return True
             print(f"  within tolerance ({consecutive_ok}/2 consecutive) -- re-scanning to confirm, no move.")
             guess_x, guess_y = localized.x, localized.y
+            guess_theta = localized.theta
             continue
         consecutive_ok = 0
 
@@ -451,6 +497,7 @@ def find_pose_via_map(
                 driven = hw.drive_forward(pos_err_m, forward_percent=POSITION_DRIVE_PERCENT)
             print(f"  drove {driven * 100:.1f}cm toward target (pose re-checked next scan)")
             guess_x, guess_y = target_x, target_y  # expect to be near the target now
+            guess_theta = wrap_angle(localized.theta + needed)  # heading after the turn just commanded
         else:
             # Cap the single commanded turn -- unlike the position branch
             # above (whose forward/backward choice keeps `needed` under
@@ -469,6 +516,7 @@ def find_pose_via_map(
             hw.turn_by_angle(step, turn_percent=REALIGN_TURN_PERCENT)
             print(f"  heading-only turn {math.degrees(step):+.1f}deg (needed {math.degrees(dtheta):+.1f}deg)")
             guess_x, guess_y = localized.x, localized.y  # position unchanged by a pure turn
+            guess_theta = wrap_angle(localized.theta + step)  # heading after the turn just commanded
 
     print("[pose-map] max iterations reached without converging.")
     return False

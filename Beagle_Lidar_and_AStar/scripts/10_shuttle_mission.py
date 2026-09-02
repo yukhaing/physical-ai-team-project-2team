@@ -18,7 +18,12 @@ Cycle:
                        message arrives (common/comm.py's TriggerServer,
                        default port 8765 -- same message the OMX arm sends)
   GOTO_DEFECT      -- goto_zone(receiving -> defect); aligns to 9 o'clock
-  DWELL_DEFECT     -- wait dwell_s (default 5s) once aligned
+  WAIT_PICKED      -- idle at defect until a {"event": "box_picked"} TCP
+                       message arrives on the same TriggerServer/port --
+                       mirrors WAIT_SIGNAL, so the OMX arm decides when it's
+                       actually done picking up the box (no fixed dwell --
+                       removed 2026-09-02 as redundant now that this signal
+                       exists)
   GOTO_RECEIVING   -- goto_zone(defect -> receiving); aligns to 3 o'clock
   -> back to WAIT_SIGNAL, repeat
 
@@ -38,7 +43,6 @@ from common.navigate import goto_zone
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "course_config.json"
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
-DWELL_S = 5.0
 TRIGGER_PORT = 8765
 
 
@@ -56,20 +60,22 @@ def load_reference(zone: str) -> list[float] | None:
     return load_json(path)
 
 
-def wait_for_box_placed(server: TriggerServer) -> None:
-    print("[WAIT_SIGNAL] idling at receiving, waiting for box_placed signal "
-          f"(TCP :{TRIGGER_PORT}, or Ctrl+C to stop)...")
+def wait_for_event(server: TriggerServer, event: str, label: str) -> None:
+    """Block until a {"event": <event>} TCP message arrives (see
+    common/comm.py's TriggerServer) -- shared by WAIT_SIGNAL (box_placed, at
+    receiving) and WAIT_PICKED (box_picked, at defect) below, same server/
+    port, just a different event name and idle-print label."""
+    print(f"[{label}] idling, waiting for {event} signal (TCP :{TRIGGER_PORT}, or Ctrl+C to stop)...")
     while True:
         for message in server.poll():
-            if message.get("event") == "box_placed":
-                print("[WAIT_SIGNAL] box_placed received.")
+            if message.get("event") == event:
+                print(f"[{label}] {event} received.")
                 return
         time.sleep(0.1)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dwell", type=float, default=DWELL_S, help="Seconds to wait at defect once aligned.")
     parser.add_argument("--cycles", type=int, default=0,
                          help="Stop after N receiving->defect->receiving round trips (0 = unlimited).")
     parser.add_argument("--trigger-port", type=int, default=TRIGGER_PORT)
@@ -125,7 +131,7 @@ def main() -> None:
     try:
         hw.start_lidar()
         while args.cycles <= 0 or cycles_done < args.cycles:
-            wait_for_box_placed(server)
+            wait_for_event(server, "box_placed", "WAIT_SIGNAL")
 
             print("\n===== GOTO_DEFECT =====")
             ok = goto_zone(hw, cfg, distance_field, obstacles, "receiving", "defect", defect_ref,
@@ -135,8 +141,8 @@ def main() -> None:
                 print("[stop] did not converge at defect -- stopping mission.")
                 break
 
-            print(f"\n===== DWELL_DEFECT ({args.dwell:.1f}s) =====")
-            time.sleep(args.dwell)
+            print("\n===== WAIT_PICKED =====")
+            wait_for_event(server, "box_picked", "WAIT_PICKED")
 
             print("\n===== GOTO_RECEIVING =====")
             ok = goto_zone(hw, cfg, distance_field, obstacles, "defect", "receiving", receiving_ref,
