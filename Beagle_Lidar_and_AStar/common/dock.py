@@ -13,9 +13,14 @@ from common.scan_align import best_rotation_offset, estimate_pose_offset, mask_f
 # isn't a perfectly precise physical pivot, so the live heading reading
 # itself has some real jitter beyond pure grid quantization. Raised to 6.0
 # for more margin against that same jitter.
-REALIGN_TOL_DEG = 6.0
+REALIGN_TOL_DEG = 4.0
 REALIGN_MAX_ITERS = 30
-REALIGN_TURN_PERCENT = 10.0
+# Lowered from 10.0 (2026-09-02) to move slower/more precisely during
+# alignment at a zone (find_pose()/find_pose_via_map()/realign_heading()) --
+# separate from drive_with_localization()'s cruise speed, which stays fast
+# for the zone-to-zone leg itself. Slower turns should reduce the
+# overshoot/skid that's been a repeated source of oscillation this session.
+REALIGN_TURN_PERCENT = 7.0
 # Rough estimate only (wheel_percent -> deg/s) -- exact rate doesn't matter much
 # since every step re-measures the true heading with LiDAR afterward instead of
 # trusting this number; it only affects how many iterations convergence takes.
@@ -98,7 +103,9 @@ POSITION_TURN_MAX_STEPS = 6
 # non-axis-aligned residual, back off toward 0.02-0.025 again rather than
 # assuming this case generalizes.
 POSITION_TOL_M = 0.015
-POSITION_DRIVE_PERCENT = 10.0
+# Lowered from 10.0 (2026-09-02) alongside REALIGN_TURN_PERCENT above, same
+# reasoning -- slower, more precise short drives during position correction.
+POSITION_DRIVE_PERCENT = 8.0
 
 # estimate_pose_offset()'s linearization only holds for small rotation (roughly
 # +/-10-15deg). If best_rotation_offset() (robust for any angle) says heading is
@@ -313,17 +320,22 @@ def find_pose(hw, reference_scan: list[float], max_iters: int = POSE_MAX_ITERS,
 # it would every drive tick.
 MAP_POSITION_SEARCH_RADIUS_M = 0.15
 # Raised from 90 to 360 (2026-09-01): 90 steps over the full 360deg circle is
-# 4deg/step -- coarser than REALIGN_TOL_DEG's 3deg default heading tolerance,
-# so a converged search could only ever land on a candidate 4deg away from
-# true, never within 3deg. Confirmed on real hardware: heading_err oscillated
-# between exactly +4deg and -4deg (176/184, 356/4, etc. -- always a multiple
-# of the 4deg grid) for many iterations without ever settling, and each
-# extra "heading-only turn" iteration added real physical drift (in-place
-# pivots aren't a perfect pivot), compounding rather than converging. 360
-# steps = 1deg/step, comfortably finer than the tolerance; ~1.1s/call
-# (measured against real captured data) -- fine for a one-shot zone
-# alignment, even across a few iterations.
-MAP_THETA_STEPS = 360
+# 4deg/step -- coarser than REALIGN_TOL_DEG's original 3deg default heading
+# tolerance, so a converged search could only ever land on a candidate 4deg
+# away from true, never within 3deg. Confirmed on real hardware: heading_err
+# oscillated between exactly +4deg and -4deg (176/184, 356/4, etc. -- always
+# a multiple of the 4deg grid) for many iterations without ever settling,
+# and each extra "heading-only turn" iteration added real physical drift
+# (in-place pivots aren't a perfect pivot), compounding rather than
+# converging.
+#
+# Backed off to 180 (2026-09-01) now that REALIGN_TOL_DEG has since been
+# raised to 6.0 -- 180 steps = 2deg/step, still comfortably (3x) finer than
+# that tolerance, so no quantization-oscillation risk reappears; halves the
+# per-call cost (~1.34s -> ~0.62s measured against real captured data),
+# which matters since find_pose_via_map() typically takes a few iterations
+# to converge.
+MAP_THETA_STEPS = 180
 
 
 def find_pose_via_map(
