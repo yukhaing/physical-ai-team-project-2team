@@ -5,7 +5,7 @@
     "y_m": 0.70
   },
   "zones": {
-    "receiving": {"x_m": 0.35, "y_m": 0.34, "heading_deg": 0.0},
+    "receiving": {"x_m": 0.355, "y_m": 0.345, "heading_deg": 0.0},
     "defect": {"x_m": 0.73, "y_m": 0.135, "heading_deg": 180.0,
                "exclude_deg_range": [-140, -40], "heading_tol_deg": 10.0, "match_sanity_mm": 180}
   },

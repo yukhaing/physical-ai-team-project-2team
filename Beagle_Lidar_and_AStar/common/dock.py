@@ -338,7 +338,16 @@ MAP_POSITION_SEARCH_RADIUS_M = 0.15
 # per-call cost (~1.34s -> ~0.62s measured against real captured data),
 # which matters since find_pose_via_map() typically takes a few iterations
 # to converge.
-MAP_THETA_STEPS = 180
+#
+# Backed off further to 90 (2026-09-02): with the heading-only turn now
+# capped (MAP_MAX_SINGLE_TURN_RAD below) and REALIGN_TOL_DEG at 6.0, 90
+# steps = 4deg/step is still comfortably (1.5x) finer than tolerance, and a
+# full real-hardware mission (4 round trips, dynamic obstacles included)
+# converged reliably at this resolution. Halves per-call search cost again
+# (~0.62s -> ~0.33s) on top of the 360->180 cut -- matters more here than
+# find_pose_via_map()'s target-heading precision does, since find_pose_via_map()
+# typically needs 5-9 iterations per leg to converge and each one pays this cost.
+MAP_THETA_STEPS = 90
 # Caps a single turn_by_angle() call in find_pose_via_map()'s heading-only
 # correction branch (see there for the full reasoning) -- confirmed
 # 2026-09-02 that an uncapped 176deg single turn overshot by ~32deg on real
