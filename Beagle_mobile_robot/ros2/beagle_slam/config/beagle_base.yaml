@@ -1,0 +1,26 @@
+beagle_base:
+  ros__parameters:
+    roboid_site_packages: /root/omx_box_project_ws/integration/yeongjin_gui/Beagle_mobile_robot/.venv/lib/python3.12/site-packages
+    port_name: /dev/ttyACM0
+    base_frame: base_link
+    odom_frame: odom
+    laser_frame: laser
+    # Measure these offsets from the wheel-axis midpoint to the LiDAR centre.
+    laser_x_m: 0.0
+    laser_y_m: 0.0
+    laser_z_m: 0.10
+    wheel_base_m: 0.0956
+    wheel_radius_m: 0.033
+    max_rpm: 93.75
+    # Must be verified by rolling the real robot a measured distance.
+    meters_per_encoder_unit: 0.0001073
+    encoder_left_sign: 1.0
+    encoder_right_sign: 1.0
+    maximum_wheel_percent: 10.0
+    forward_stop_distance_m: 0.14
+    reverse_stop_distance_m: 0.14
+    command_timeout_s: 0.4
+    publish_rate_hz: 15.0
+    scan_rate_hz: 8.0
+    range_min_m: 0.08
+    range_max_m: 1.2

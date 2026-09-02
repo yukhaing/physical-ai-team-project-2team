@@ -206,6 +206,7 @@ class SafeBeagle:
         dry_run: bool = False,
         max_speed: float = 25.0,
         scene: str = "shuttle",
+        port_name: str | None = None,
     ) -> None:
         self.dry_run = dry_run
         self.max_speed = abs(float(max_speed))
@@ -217,7 +218,7 @@ class SafeBeagle:
                 from roboid import Beagle  # type: ignore
             except ImportError as exc:
                 raise RuntimeError("Could not import roboid. Run with --dry-run first.") from exc
-            self.robot = Beagle()
+            self.robot = Beagle(0, port_name) if port_name else Beagle()
         atexit.register(self.stop)
         for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
             if sig is not None:
@@ -259,6 +260,11 @@ class SafeBeagle:
         self.robot.start_lidar()
 
     def wait_until_lidar_ready(self) -> None:
+        # The Roboid API can leave the mission process alive with cached sensor
+        # values after its USB/BLE link disappears.  Do not treat those values
+        # as proof that a physical Beagle is present.
+        if not self.is_connected():
+            return
         if hasattr(self.robot, "wait_until_lidar_ready"):
             self.robot.wait_until_lidar_ready()
         else:
@@ -268,6 +274,19 @@ class SafeBeagle:
                     return
                 time.sleep(0.05)
             raise TimeoutError("LiDAR did not become ready in time.")
+
+    def is_connected(self) -> bool:
+        if self.dry_run:
+            return True
+        roboid = getattr(self.robot, '_roboid', None)
+        connector = getattr(roboid, '_connector', None)
+        checker = getattr(connector, 'is_connected', None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker())
+        except Exception:
+            return False
 
     def lidar(self) -> list[float]:
         return sanitize_scan(self.robot.lidar())

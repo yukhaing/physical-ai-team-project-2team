@@ -1,0 +1,10 @@
+beagle_mapping_explorer:
+  ros__parameters:
+    forward_speed_mps: 0.025
+    turn_speed_rps: 0.45
+    front_stop_distance_m: 0.18
+    turn_clearance_m: 0.10
+    turn_angle_rad: 1.5708
+    laps: 2
+    max_duration_s: 180.0
+    scan_timeout_s: 0.5

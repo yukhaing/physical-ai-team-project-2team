@@ -14,7 +14,7 @@ gui_build() {
     set -e
     source /opt/ros/jazzy/setup.bash
     source /root/ros2_ws/install/setup.bash
-    cd /root/omx_box_project_ws/omx
+    cd /root/omx_box_project_ws/integration/yeongjin_gui/omx
     colcon build --base-paths src --symlink-install --packages-select omx_box_control
   '
 }
@@ -28,8 +28,8 @@ gui_validate() {
     export YOLO_CONFIG_DIR=/tmp/Ultralytics
     mkdir -p /tmp/Ultralytics
     python -c "import cv_bridge, numpy, PyQt5, rclpy, ultralytics; assert int(numpy.__version__.split(chr(46))[0]) < 2; print(\"GUI Python dependencies: OK\")"
-    test -f /root/omx_box_project_ws/omx/models/best.pt
-    test -f /root/omx_box_project_ws/runtime/calibration/active.yaml
+    test -f /root/omx_box_project_ws/integration/omx_box_system/models/box_defect_best.pt
+    test -f /root/omx_box_project_ws/integration/omx_box_system/calibration/omx_camera_homography_7point.yaml
     echo "GUI model and calibration: OK"
   '
 }
@@ -79,16 +79,16 @@ case "${1:-}" in
       -e BEAGLE_STATUS_PORT="${BEAGLE_STATUS_PORT:-9000}" \
       -e BEAGLE_LOCAL_MISSION_LAUNCH="${BEAGLE_LOCAL_MISSION_LAUNCH:-auto}" \
       "${CONTAINER_NAME}" \
-      bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" start
+      bash "/root/omx_box_project_ws/scripts/omx_gui_system_container.sh" start
     ;;
   gui-down)
-    docker exec "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" stop
+    docker exec "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/scripts/omx_gui_system_container.sh" stop
     ;;
   gui-status)
-    docker exec "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" status
+    docker exec "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/scripts/omx_gui_system_container.sh" status
     ;;
   gui-attach)
-    docker exec -it "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/omx/scripts/omx_gui_system_container.sh" attach
+    docker exec -it "${CONTAINER_NAME}" bash "/root/omx_box_project_ws/scripts/omx_gui_system_container.sh" attach
     ;;
   *)
     show_help

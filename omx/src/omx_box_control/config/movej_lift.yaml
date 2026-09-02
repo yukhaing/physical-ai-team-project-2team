@@ -26,7 +26,7 @@ movej_lift:
     height_reward: 0.0
     path_samples: 51
     gripper_joint_name: gripper_joint_1
-    min_grasp_position: 0.005
+    min_grasp_position: 0.05
     max_grasp_position: 0.70
     max_gripper_change: 0.05
     # Match the approved low-box pick band (25-38mm).

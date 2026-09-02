@@ -16,7 +16,7 @@ class MoveJLoadedLift(MoveJXyApproach):
         super().__init__()
         extras = {
             'gripper_joint_name': 'gripper_joint_1',
-            'min_grasp_position': 0.15,
+            'min_grasp_position': 0.05,
             'max_grasp_position': 0.60,
             'max_gripper_change': 0.05,
             'min_start_z': 0.075,

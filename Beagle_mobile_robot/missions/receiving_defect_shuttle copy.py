@@ -189,6 +189,17 @@ def goal_command(pose: Pose2D, goal: tuple[float, float], settings: MissionSetti
         speed = max(0.0, settings.nav_speed_mps - abs(alpha) / 20.0)
     speed = min(speed, max(0.01, dist) * 0.6)  # ease in on final approach, avoid overshoot
     left, right = twist_to_wheel_percent(speed, omega, wheel_base_m=settings.wheel_base_m, wheel_radius_m=settings.wheel_radius_m, max_rpm=settings.max_rpm)
+    # Pure-pursuit has a singularity when the target is almost exactly behind
+    # the robot: sin(alpha) approaches zero and produces a sub-deadband wheel
+    # command, so the mission says it is moving while the Beagle stays still.
+    # Turn in place at the already configured avoidance turn speed until the
+    # target is back inside the forward steering range.
+    if abs(alpha) > settings.nav_slowdown_alpha:
+        commanded_turn = max(abs(left), abs(right))
+        minimum_turn = min(settings.nav_max_percent, settings.turn_percent)
+        if commanded_turn < minimum_turn:
+            direction = 1.0 if alpha > 0.0 else -1.0
+            left, right = -minimum_turn * direction, minimum_turn * direction
     biggest = max(abs(left), abs(right))
     if biggest > settings.nav_max_percent:
         scale = settings.nav_max_percent / biggest
@@ -198,9 +209,15 @@ def goal_command(pose: Pose2D, goal: tuple[float, float], settings: MissionSetti
 
 
 def update_pose(pose: Pose2D, commanded_left: float, commanded_right: float, dt: float, gyro_dps: float, gyro_bias: float, settings: MissionSettings) -> Pose2D:
+    # The Beagle has no wheel-encoder feedback in this mission.  When both
+    # wheel commands are zero the chassis cannot be rotating, so integrating
+    # gyro spikes here only corrupts the stored heading.  This previously
+    # changed a stationary receiving-zone heading from 0 to about -58 degrees
+    # and made the next departure steer hard to the left.  Hold the complete
+    # pose while stopped; use the gyro only while a wheel command is active.
+    if commanded_left == 0.0 and commanded_right == 0.0:
+        return Pose2D(pose.x, pose.y, pose.theta)
     gyro = gyro_dps - gyro_bias
-    if commanded_left == 0.0 and commanded_right == 0.0 and abs(gyro) <= 1.0:
-        gyro = 0.0
     left_mps = wheel_percent_to_mps(commanded_left, wheel_radius_m=settings.wheel_radius_m, max_rpm=settings.max_rpm)
     right_mps = wheel_percent_to_mps(commanded_right, wheel_radius_m=settings.wheel_radius_m, max_rpm=settings.max_rpm)
     return integrate_velocity(pose, left_mps, right_mps, dt, wheel_base_m=settings.wheel_base_m, gyro_z_dps=gyro, gyro_weight=1.0)
@@ -220,6 +237,8 @@ class BoxSignal:
         self.server = server
         self._got_signal = False
         self._operator_unloaded = False
+        self._emergency_stop = False
+        self._reset_requested = False
 
     def reset(self) -> None:
         self._got_signal = False
@@ -236,6 +255,14 @@ class BoxSignal:
                 if not self._operator_unloaded:
                     print("BoxSignal: operator_unloaded received")
                 self._operator_unloaded = True
+            elif event == "emergency_stop":
+                if not self._emergency_stop:
+                    print("BoxSignal: emergency_stop received")
+                self._emergency_stop = True
+                self._reset_requested = False
+            elif event == "reset":
+                print("BoxSignal: reset received")
+                self._reset_requested = True
 
     def is_set(self) -> bool:
         self._poll()
@@ -244,6 +271,18 @@ class BoxSignal:
     def operator_unloaded(self) -> bool:
         self._poll()
         return self._operator_unloaded
+
+    def emergency_stopped(self) -> bool:
+        self._poll()
+        return self._emergency_stop
+
+    def consume_reset_requested(self) -> bool:
+        self._poll()
+        requested = self._reset_requested
+        self._reset_requested = False
+        if requested:
+            self._emergency_stop = False
+        return requested
 
 
 # ---- mission state machine -------------------------------------------------
@@ -257,6 +296,8 @@ class ShuttleData:
 
 
 def next_state(state: str, data: ShuttleData, align_s: float) -> str:
+    if state == "EMERGENCY_STOP":
+        return "EMERGENCY_STOP"
     if data.avoidance == "SENSOR_FAIL":
         return "SENSOR_FAIL"
     if state == "WAIT_SIGNAL":
@@ -288,12 +329,15 @@ class ShuttleMission:
         self._gyro_bias = 0.0
         self._previous_time = 0.0
         self._last_status_heartbeat = 0.0
+        self.hardware_connected = False
 
     def _send(self, text: str, **extra: object) -> None:
         if self.status_client is not None:
+            extra.setdefault('hardware_connected', self.hardware_connected)
             self.status_client.send_status(text, **extra)
 
     def start(self) -> None:
+        self.hardware_connected = self.robot.is_connected()
         self._gyro_bias = calibrate_gyro_bias(self.robot)
         self.box_signal.reset()
         self._previous_time = time.monotonic()
@@ -302,7 +346,9 @@ class ShuttleMission:
     def _send_heartbeat(self, now: float, *, force: bool = False) -> None:
         if not force and now - self._last_status_heartbeat < 1.0:
             return
-        if self.state == "WAIT_SIGNAL":
+        if not self.hardware_connected:
+            self._send("연결 끊김", mission_state=self.state)
+        elif self.state == "WAIT_SIGNAL":
             self._send("대기", at="receiving_zone", mission_state=self.state)
         elif self.state == "GOTO_DEFECT":
             self._send("defect 존으로 이동중", mission_state=self.state)
@@ -328,6 +374,49 @@ class ShuttleMission:
         now = time.monotonic()
         dt = max(0.001, now - self._previous_time)
         self._previous_time = now
+
+        was_connected = self.hardware_connected
+        self.hardware_connected = self.robot.is_connected()
+        if not self.hardware_connected:
+            self.robot.stop()
+            self.commanded = (0.0, 0.0)
+            self._send_heartbeat(now, force=was_connected)
+            return {
+                "t": now,
+                "x_cm": self.pose.x * 100.0,
+                "y_cm": self.pose.y * 100.0,
+                "theta_deg": math.degrees(self.pose.theta),
+                "state": self.state,
+                "avoid": "DISCONNECTED",
+                "signal": False,
+                "dist_cm": 0.0,
+                "cmd_l": 0.0,
+                "cmd_r": 0.0,
+            }
+        if not was_connected:
+            self._send_heartbeat(now, force=True)
+
+        reset_requested = self.box_signal.consume_reset_requested()
+        if self.box_signal.emergency_stopped():
+            if self.state != "EMERGENCY_STOP":
+                self.state = "EMERGENCY_STOP"
+                self.goal_stable = 0
+                self.align_started = None
+                self._send("비상정지", mission_state=self.state)
+            # Stop immediately and keep zero wheel commands latched.
+            self.robot.stop()
+            self.commanded = (0.0, 0.0)
+        elif self.state == "EMERGENCY_STOP" and reset_requested:
+            self.box_signal.reset()
+            # Reset clears the emergency latch but must not start autonomous
+            # motion.  The next box_placed event is the only transition that
+            # may send the Beagle toward the defect zone.
+            self.state = "WAIT_SIGNAL"
+            self.goal_stable = 0
+            self.align_started = None
+            self.robot.stop()
+            self.commanded = (0.0, 0.0)
+            self._send("대기", mission_state=self.state)
 
         gyro_dps = float(self.robot.gyroscope_z())
         self.pose = update_pose(self.pose, *self.commanded, dt, gyro_dps, self._gyro_bias, s)
@@ -377,7 +466,7 @@ class ShuttleMission:
 
         if self.state == "SENSOR_FAIL":
             left = right = 0.0
-        elif self.state in ("WAIT_SIGNAL", "DWELL_DEFECT"):
+        elif self.state in ("WAIT_SIGNAL", "DWELL_DEFECT", "EMERGENCY_STOP"):
             left = right = 0.0
         elif self.state == "ALIGN_RECEIVING":
             left, right = 0.0, s.receiving_align_percent
@@ -439,6 +528,7 @@ def main() -> None:
     parser.add_argument("--config", default=None, help="path to course_config.json (default: config/course_config.json)")
     parser.add_argument("--duration", type=float, default=0.0, help="seconds; 0 = run until Ctrl+C or --cycles")
     parser.add_argument("--cycles", type=int, default=0, help="stop after N receiving->defect->receiving round trips (0 = unlimited)")
+    parser.add_argument("--port-name", default=None, help="dedicated Beagle receiver device path")
     parser.add_argument("--trigger-port", type=int, default=8765, help="port to listen on for OMX's box-placed signal")
     parser.add_argument("--status-host", default=None, help="dashboard host to send status updates to (omit to disable)")
     parser.add_argument("--status-port", type=int, default=9000, help="dashboard port to send status updates to")
@@ -458,7 +548,8 @@ def main() -> None:
         status_client.start()
 
     try:
-        with SafeBeagle(dry_run=args.dry_run, scene=args.scene, max_speed=settings.nav_max_percent) as robot:
+        with SafeBeagle(dry_run=args.dry_run, scene=args.scene,
+                        max_speed=settings.nav_max_percent, port_name=args.port_name) as robot:
             robot.start_lidar()
             robot.wait_until_lidar_ready()
 

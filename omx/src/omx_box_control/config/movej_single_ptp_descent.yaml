@@ -24,13 +24,13 @@ movej_single_ptp_descent:
     start_min_pitch: 1.221730476
     start_max_pitch: 1.483529864
 
-    # Lower the pick point by 2mm; completion remains guarded at 25-38mm.
+    # First physical validation targets the safe upper edge, not the 32mm center.
     use_target_z: true
-    target_z: 0.030
+    target_z: 0.038
     z_tolerance: 0.001
     z_weight: 20000.0
     target_z_min: 0.025
-    target_z_max: 0.038
+    target_z_max: 0.040
     min_path_z: 0.025
     min_final_z: 0.025
     minimum_descent: 0.030

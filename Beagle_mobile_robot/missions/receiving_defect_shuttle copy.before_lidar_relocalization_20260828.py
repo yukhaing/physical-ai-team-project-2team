@@ -61,6 +61,8 @@ class MissionSettings:
     nav_max_percent: float
     box_flag_path: str
     simulate_signal_interval_s: float
+    receiving_align_percent: float
+    receiving_align_duration_s: float
 
 
 def load_settings(config_path: str | None = None) -> MissionSettings:
@@ -95,6 +97,8 @@ def load_settings(config_path: str | None = None) -> MissionSettings:
         nav_max_percent=nav_cfg["max_wheel_percent"],
         box_flag_path=mission_cfg["box_flag_path"],
         simulate_signal_interval_s=mission_cfg["simulate_signal_interval_s"],
+        receiving_align_percent=mission_cfg.get("receiving_align_percent", 6.0),
+        receiving_align_duration_s=mission_cfg.get("receiving_align_duration_s", 2.0),
     )
     for label, zone in (("receiving", settings.receiving_m), ("defect", settings.defect_m)):
         if not (0.0 <= zone[0] <= settings.boundary_x_m and 0.0 <= zone[1] <= settings.boundary_y_m):
@@ -217,39 +221,17 @@ class BoxSignal:
     def __init__(self, server: TriggerServer) -> None:
         self.server = server
         self._got_signal = False
-        self._emergency_stop = False
-        self._reset_requested = False
 
     def reset(self) -> None:
         self._got_signal = False
 
-    def _poll(self) -> None:
-        for message in self.server.poll():
-            event = message.get("event")
-            if event == "box_placed":
-                self._got_signal = True
-            elif event == "emergency_stop":
-                self._emergency_stop = True
-                self._reset_requested = False
-            elif event == "reset":
-                self._reset_requested = True
-
     def is_set(self) -> bool:
-        self._poll()
+        for message in self.server.poll():
+            if message.get("event") == "box_placed":
+                if not self._got_signal:
+                    print("BoxSignal: box_placed received")
+                self._got_signal = True
         return self._got_signal
-
-    def emergency_stopped(self) -> bool:
-        self._poll()
-        return self._emergency_stop
-
-    def consume_reset_requested(self) -> bool:
-        self._poll()
-        requested = self._reset_requested
-        self._reset_requested = False
-        if requested:
-            self._emergency_stop = False
-        return requested
-
 
 
 # ---- mission state machine -------------------------------------------------
@@ -259,11 +241,10 @@ class ShuttleData:
     goal_reached: bool
     box_signal: bool
     dwell_elapsed: float
+    align_elapsed: float
 
 
-def next_state(state: str, data: ShuttleData, dwell_s: float) -> str:
-    if state == "EMERGENCY_STOP":
-        return "EMERGENCY_STOP"
+def next_state(state: str, data: ShuttleData, dwell_s: float, align_s: float) -> str:
     if data.avoidance == "SENSOR_FAIL":
         return "SENSOR_FAIL"
     if state == "WAIT_SIGNAL":
@@ -273,7 +254,9 @@ def next_state(state: str, data: ShuttleData, dwell_s: float) -> str:
     if state == "DWELL_DEFECT":
         return "GOTO_RECEIVING" if data.dwell_elapsed >= dwell_s else "DWELL_DEFECT"
     if state == "GOTO_RECEIVING":
-        return "WAIT_SIGNAL" if data.goal_reached else "GOTO_RECEIVING"
+        return "ALIGN_RECEIVING" if data.goal_reached else "GOTO_RECEIVING"
+    if state == "ALIGN_RECEIVING":
+        return "WAIT_SIGNAL" if data.align_elapsed >= align_s else "ALIGN_RECEIVING"
     return state  # SENSOR_FAIL is terminal
 
 
@@ -288,6 +271,7 @@ class ShuttleMission:
         self.pose = Pose2D(settings.receiving_m[0], settings.receiving_m[1], 0.0)
         self.commanded = (0.0, 0.0)
         self.dwell_started: float | None = None
+        self.align_started: float | None = None
         self.goal_stable = 0
         self.cycles_done = 0
         self._gyro_bias = 0.0
@@ -305,7 +289,6 @@ class ShuttleMission:
         self._send_heartbeat(self._previous_time, force=True)
 
     def _send_heartbeat(self, now: float, *, force: bool = False) -> None:
-        """Continuously expose mission readiness, including after reconnects."""
         if not force and now - self._last_status_heartbeat < 1.0:
             return
         if self.state == "WAIT_SIGNAL":
@@ -316,6 +299,8 @@ class ShuttleMission:
             self._send("도착", at="defect_zone", mission_state=self.state)
         elif self.state == "GOTO_RECEIVING":
             self._send("대기 존으로 이동중", mission_state=self.state)
+        elif self.state == "ALIGN_RECEIVING":
+            self._send("수령 위치 정렬중", mission_state=self.state)
         else:
             self._send(self.state, mission_state=self.state)
         self._last_status_heartbeat = now
@@ -332,22 +317,6 @@ class ShuttleMission:
         now = time.monotonic()
         dt = max(0.001, now - self._previous_time)
         self._previous_time = now
-
-        reset_requested = self.box_signal.consume_reset_requested()
-        if self.box_signal.emergency_stopped():
-            if self.state != "EMERGENCY_STOP":
-                self.state = "EMERGENCY_STOP"
-                self.goal_stable = 0
-                self.dwell_started = None
-                self._send("비상정지", mission_state=self.state)
-            self.robot.stop()
-            self.commanded = (0.0, 0.0)
-        elif self.state == "EMERGENCY_STOP" and reset_requested:
-            self.box_signal.reset()
-            self.state = "GOTO_RECEIVING"
-            self.goal_stable = 0
-            self.dwell_started = None
-            self._send("대기 존으로 이동중", mission_state=self.state)
 
         gyro_dps = float(self.robot.gyroscope_z())
         self.pose = update_pose(self.pose, *self.commanded, dt, gyro_dps, self._gyro_bias, s)
@@ -366,8 +335,9 @@ class ShuttleMission:
         goal_reached = self.goal_stable >= s.goal_stable_samples
 
         dwell_elapsed = (now - self.dwell_started) if self.dwell_started is not None else 0.0
-        data = ShuttleData(avoidance, goal_reached, self.box_signal.is_set(), dwell_elapsed)
-        new_state = next_state(self.state, data, s.dwell_s)
+        align_elapsed = (now - self.align_started) if self.align_started is not None else 0.0
+        data = ShuttleData(avoidance, goal_reached, self.box_signal.is_set(), dwell_elapsed, align_elapsed)
+        new_state = next_state(self.state, data, s.dwell_s, s.receiving_align_duration_s)
         if new_state != self.state:
             self.goal_stable = 0
             if self.state == "WAIT_SIGNAL" and new_state == "GOTO_DEFECT":
@@ -378,13 +348,17 @@ class ShuttleMission:
             elif self.state == "DWELL_DEFECT" and new_state == "GOTO_RECEIVING":
                 self._send("출발", to="receiving_zone")
                 self._send("대기 존으로 이동중")
-            elif self.state == "GOTO_RECEIVING" and new_state == "WAIT_SIGNAL":
-                self._send("도착", at="receiving_zone")
+            elif self.state == "GOTO_RECEIVING" and new_state == "ALIGN_RECEIVING":
+                self._send("수령 위치 정렬중", mission_state="ALIGN_RECEIVING")
+            elif self.state == "ALIGN_RECEIVING" and new_state == "WAIT_SIGNAL":
+                self._send("도착", at="receiving_zone", mission_state="WAIT_SIGNAL")
 
             if new_state == "DWELL_DEFECT":
                 self.dwell_started = now
+            if new_state == "ALIGN_RECEIVING":
+                self.align_started = now
             if new_state == "WAIT_SIGNAL":
-                if self.state == "GOTO_RECEIVING":
+                if self.state == "ALIGN_RECEIVING":
                     self.cycles_done += 1
                 self.box_signal.reset()
             self.state = new_state
@@ -393,8 +367,10 @@ class ShuttleMission:
 
         if self.state == "SENSOR_FAIL":
             left = right = 0.0
-        elif self.state in ("WAIT_SIGNAL", "DWELL_DEFECT", "EMERGENCY_STOP"):
+        elif self.state in ("WAIT_SIGNAL", "DWELL_DEFECT"):
             left = right = 0.0
+        elif self.state == "ALIGN_RECEIVING":
+            left, right = 0.0, s.receiving_align_percent
         elif avoidance != "CLEAR":
             left, right = self.avoider.wheel_command(avoidance)
         else:
