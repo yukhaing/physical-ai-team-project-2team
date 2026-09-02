@@ -1,56 +1,45 @@
 # physical-ai-team-project-2team
-Box defect detection and transfer console
 
-카메라 영상에서 YOLOv8로 박스를 검출하고, 그중 불량 박스를 관제 GUI에서 선택해
-OMX 로봇팔 적재 흐름으로 넘기고, Beagle 이송 사이클까지 연결한 통합 관제
-프로토타입입니다. 현재 저장소의 중심은 불량 박스 이송 시나리오 검증과 실제
-장비 연동입니다.
+## 불량 박스 검출·이송 통합 시스템
 
-- **검출/분류**: YOLOv8, Roboflow 데이터셋(Box/Damaged Box, 총 926장) 기반 학습
-- **관제/로봇 제어**: OMX 로봇팔의 기존 pick-and-place 흐름을 GUI와 연결
-- **통합 방식**: 별도 `main_pipeline.py`가 아니라 OMX launch/노드 내부에서
-  YOLO 표시, 선택, 상태 전이, 로봇 흐름을 결합
+YOLOv8로 불량(`defect`) 박스를 검출하고 OMX-F 로봇팔로 Beagle 이동 로봇에
+적재한 뒤 불량 구역으로 이송하는 통합 관제 프로토타입입니다.
 
-  
-## Team Members
-- [하영진]   — YOLO (detection & classification)
-- [유유카인] — YOLO (detection & classification)
-- [배민서]  — OMX (robot arm control)
-- [최재현]  — OMX (robot arm control)
+## 구현 기능
 
-## Project Structure
-- `yolo/` — YOLO training, dataset, and detection logic
-- `omx/` — OMX robot arm control code
-- `integration/` — 통합 관제 문서와 YOLO-OMX 연계 설명
-- `docs/` — Team decisions, data contract, and other shared documentation
-- `reports/` — Weekly, individual, and final reports for LMS submission
-- `photos/` — Photos/screenshots attached to reports
-- `results/` — Evaluation results and demo video links
+- YOLO `normal`/`defect` 검출과 불량 박스 선택
+- Qt 기반 통합 관제 GUI와 SQLite 작업 로그
+- OMX 집기·적재, 카메라 좌표 보정, TCP 기반 Beagle 상태·트리거 연동
+- 하역 뒤 Beagle이 수령 위치로 복귀하는 동안 다음 불량 박스 집기
+- Beagle 수령 위치 도착 확인 뒤 다음 박스 최종 배치
+- 집기 실패 복구와 비상정지 뒤 HOME 복귀·그리퍼 해제 절차
 
-## Setup
-See `yolo/requirements.txt` for Python dependencies.
+## 구조
 
-OMX 통합 관제 GUI의 초기 세팅과 실행 방법은 `omx/README.md` 와
-`integration/DEFECT_TRANSFER_CONSOLE.md` 를 우선 참고한다. 현재 OMX 쪽은
-`./container.sh gui-up` 으로 실행에 필요한 프로세스를 한 번에 올릴 수 있다.
+- `yolo/` — 모델, 데이터셋, 학습·검출 코드
+- `omx/` — ROS 2 Jazzy 기반 OMX-F 제어와 Docker 환경
+- `integration/` — GUI·Beagle 통합 관제 운영 문서
+- `Beagle_mobile_robot/`, `Beagle_Lidar_and_AStar/` — Beagle 셔틀·경로 계획 구현
+- `docs/` — 팀 의사결정과 인터페이스 문서
 
-## Current Status
+## 실행
 
-### Implemented
-- Qt 기반 통합 관제 GUI
-- YOLO 검출 결과 표시와 불량 박스 선택
-- OMX pick coordinator와 상태 연동
-- Beagle TCP 기반 트리거/상태 연동
-- OMX 적재 후 Beagle 이동, 하역 완료, 복귀 사이클
-- 작업 로그 SQLite 기록
-- Beagle 분리 실행 또는 2-PC 배치 지원
+초기 Docker/ROS 설정과 GUI·Beagle 실행 절차는
+[`integration/DEFECT_TRANSFER_CONSOLE.md`](integration/DEFECT_TRANSFER_CONSOLE.md)를
+참고합니다. 빌드 후 GUI 스택은 다음과 같이 실행합니다.
 
-### Using Dummy/Temporary Values
-- 현재 캘리브레이션 값은 실제 환경 기준 최종값이 아니며 임시값 기준으로 테스트
-- 최종 좌표 보정값은 추후 팀원에게 받아 반영 예정
+```bash
+cd omx/docker
+BEAGLE_MODE=auto ./container.sh gui-up
+```
 
-### To Be Updated Next
-- Beagle 정지/예외 상황 프로토콜 보강
-- 팀원에게 받은 최종 캘리브레이션 값으로 좌표 변환 재검증
-- 테스트용 자동 진행/우회 설정과 실운영 설정 분리
-- 통합 관제 문서와 실운영 문서 경계 재정리
+실장비 운용 전에는 카메라 보정값과 `config/console.yaml`의 Beagle 우회·자동
+진행 설정을 확인해야 합니다. 위험 상황에서는 GUI 소프트웨어 정지와 별도로
+OMX 및 Beagle의 물리 E-stop을 사용해야 합니다.
+
+## 팀 구성
+
+- 하영진 — YOLO 검출·분류, 통합 관제 GUI
+- 유유카인 — YOLO 검출·분류, Beagle
+- 배민서 — OMX 로봇팔 제어
+- 최재현 — OMX 로봇팔 제어

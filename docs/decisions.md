@@ -9,8 +9,8 @@
 기존 Roboflow 데이터셋을 base로 사용:
 https://universe.roboflow.com/inft2060-ffjce/cardboard-boxes-4h3rr/dataset/2
 - 클래스: Box, Damaged Box
-- 총 926장
-- 계획: 이 데이터셋으로 1차 fine-tuning 후, 필요하면
-   실제 환경에서 촬영한 사진으로 2차 fine-tuning 진행
+- 총 3,925장
+- 실제 환경에서 촬영한 사진을 추가해 데이터셋을 보강함
+- 추가 촬영은 현장 성능 검증 결과에 따라 필요할 때만 진행
 
 ## Data Contract (YOLO → OMX)
