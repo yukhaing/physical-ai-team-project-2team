@@ -16,7 +16,7 @@ REALIGN_MAX_ITERS = 30
 # (find_pose()/find_pose_via_map()/realign_heading()) -- kept low and slow
 # to reduce turn overshoot, separate from drive_with_localization()'s faster
 # cruise speed for the zone-to-zone drive itself.
-REALIGN_TURN_PERCENT = 7.5
+REALIGN_TURN_PERCENT = 7
 # Rough estimate of turn speed (wheel percent -> deg/s), only used to size
 # MAX_SINGLE_TURN_RAD below -- doesn't need to be precise, since every turn
 # is re-measured with LiDAR afterward instead of trusted blindly.
