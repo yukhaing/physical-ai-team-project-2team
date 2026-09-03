@@ -5,8 +5,8 @@
     "y_m": 0.70
   },
   "zones": {
-    "receiving": {"x_m": 0.355, "y_m": 0.345, "heading_deg": 0.0},
-    "defect": {"x_m": 0.73, "y_m": 0.135, "heading_deg": 180.0,
+    "receiving": {"x_m": 0.35, "y_m": 0.345, "heading_deg": 0.0},
+    "defect": {"x_m": 0.72, "y_m": 0.135, "heading_deg": 180.0,
                "exclude_deg_range": [-140, -40], "heading_tol_deg": 10.0, "match_sanity_mm": 180}
   },
   "_receiving_heading_note": "Tried 180deg (9 o'clock) on 2026-09-02 to shrink GOTO_RECEIVING's large final-alignment correction turn (arrival heading consistently ~135-147deg, so a 0deg target needed ~135-145deg to correct, a large single turn_by_angle() call that measurably overshoots on this hardware -- confirmed a 176deg commanded turn landed ~32deg off, causing oscillation). Reverted the same day: `from_zone[\"heading_deg\"]` also seeds the START heading drive_with_localization() assumes for the NEXT leg (goto_zone()'s start_pose) -- receiving->defect's path needs roughly -28deg initially (defect is down-and-right from receiving), which is close to 0deg but nearly opposite 180deg, so starting GOTO_DEFECT believing the robot faced 180deg sent pure-pursuit the wrong way entirely (dist_to_goal INCREASING run after run, confirmed on real hardware) -- a worse failure than the oscillation it was meant to fix. The large-correction-at-arrival problem is still open; a fix needs to target find_pose_via_map()'s turn execution itself (e.g. capping how large a single turn_by_angle() call it issues), not the zone's target heading, since changing that has this equal-and-opposite cost on the following leg's departure.",
