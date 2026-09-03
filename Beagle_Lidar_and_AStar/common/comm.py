@@ -8,9 +8,13 @@ import threading
 
 class TriggerServer:
     """Minimal TCP server for the OMX arm's newline-delimited JSON signal,
-    e.g. {"event": "box_placed"}\\n. accept()/recv() are blocking calls, run in
-    a background thread; the mission loop calls poll() (non-blocking) to drain
-    whatever arrived since the last check.
+    e.g. {"event": "box_placed"}\\n.
+
+    Two background threads do the waiting so the mission loop never blocks:
+    one thread loops on accept(), checking every 0.5s for a new connection
+    (so it can stop cleanly); a second thread per connected client waits on
+    recv() for that client's data. The mission loop just calls poll() --
+    returns immediately -- to grab whatever messages have arrived so far.
     """
 
     def __init__(self, host: str = "0.0.0.0", port: int = 8765) -> None:
