@@ -1,0 +1,58 @@
+movej_lift:
+  ros__parameters:
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    use_target_z: true
+    # Raise the loaded box before the revised higher lateral place transfer.
+    target_z: 0.17561
+    z_tolerance: 0.0005
+    z_weight: 20000.0
+    min_path_z: 0.025
+    min_final_z: 0.170
+    min_pitch: -3.14159
+    max_pitch: 3.14159
+    preferred_pitch: 0.0
+    pitch_weight: 0.0
+    xy_weight: 20000.0
+    joint_delta_weight: 100.0
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    path_samples: 51
+    gripper_joint_name: gripper_joint_1
+    min_grasp_position: 0.15
+    max_grasp_position: 0.70
+    max_gripper_change: 0.05
+    # Match the approved low-box pick band (25-38mm).
+    min_start_z: 0.025
+    max_start_z: 0.120
+    # Require the measured loaded pose to clear the revised transfer height.
+    min_completed_z: 0.165
+    max_completed_z: 0.190
+    min_actual_rise: 0.015
+    # Allow the additional rise from the low pick pose.
+    max_actual_rise: 0.160
+    # Keep the planned lift close to vertical. Actual feedback can vary after
+    # joint3 terminal trim, so only gross lateral motion fails completion.
+    max_command_xy_shift: 0.010
+    max_actual_xy_shift: 0.030
+    max_path_drop: 0.001
+    # Compensation commands above the nominal target to overcome loaded sag.
+    max_command_z: 0.210
+    # Validated loaded-rise residual compensation on 2026-08-06.
+    joint_goal_compensation: [0.0, -0.06, -0.04, 0.0, 0.0]
+    # Restore the camera-aligned gripper roll while raising the grasped box.
+    reset_joint5_during_lift: true
+    lift_target_joint5: 0.0
+    maximum_lift_joint5_delta: 0.80
+    lift_joint5_tolerance: 0.05
+    move_duration: 5.0
+    minimum_completion_time: 5.7
+    settle_time: 0.10
+    timeout: 15.0

@@ -1,14 +1,17 @@
 # models/ — Trained Model Weights
 
-This folder is where trained YOLOv8 model weight files (.pt files) would go locally.
+Actual .pt weight files are too large for GitHub — stored in Google Drive instead:
+[Drive link — https://drive.google.com/drive/u/0/folders/1dJubw57Wyx5h83vyYX7wvnbYiO7bou-Y ]
 
-## Files (to be added)
-- `best.pt` — our best-performing trained model, used for actual detection
+## Model Comparison (Stage 1 — Roboflow dataset)
 
-## Important — Do Not Push Model Files to GitHub
-Model weight files are large (often 20-200+ MB) and should NOT be committed to GitHub.
+| Model | mAP50 | mAP50-95 |
+|---|---|---|
+| YOLOv8s | 0.7473 | 0.7311 |
+| YOLOv8m | 0.7734 | 0.763 |
+| YOLOv8l | 0.843 | 0.8396 |
 
-- These files are already excluded via `.gitignore`
-- Actual trained model weights are stored here instead: [Google Drive link — add once created]
-- After each training run, upload the resulting `best.pt` to that Drive folder 
-  and update the link/date here so teammates know which is the latest version
+See `model_size_comparison.csv` for full details.
+
+## Chosen Model
+.....

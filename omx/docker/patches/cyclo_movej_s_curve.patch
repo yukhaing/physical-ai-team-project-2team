@@ -1,0 +1,92 @@
+diff --git a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
+--- a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
++++ b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
+@@ -62,5 +62,10 @@ private:
+   double collision_buffer_;
+   double collision_safe_distance_;
+   double joint_state_timeout_;
++  bool smooth_profile_enabled_;
++  double smooth_max_velocity_;
++  double smooth_max_acceleration_;
++  double smooth_max_jerk_;
++  double smooth_min_duration_;
+
+   std::string urdf_path_;
+diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+--- a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
++++ b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+@@ -42,5 +42,10 @@ OmxMoveJControllerNode::OmxMoveJControllerNode()
+   collision_buffer_ = this->declare_parameter("collision_buffer", 0.05);
+   collision_safe_distance_ = this->declare_parameter("collision_safe_distance", 0.02);
+   joint_state_timeout_ = this->declare_parameter("joint_state_timeout", 0.5);
++  smooth_profile_enabled_ = this->declare_parameter("smooth_profile_enabled", false);
++  smooth_max_velocity_ = this->declare_parameter("smooth_max_velocity", 0.20);
++  smooth_max_acceleration_ = this->declare_parameter("smooth_max_acceleration", 0.30);
++  smooth_max_jerk_ = this->declare_parameter("smooth_max_jerk", 1.0);
++  smooth_min_duration_ = this->declare_parameter("smooth_min_duration", 1.0);
+
+   urdf_path_ = this->declare_parameter("urdf_path", std::string(""));
+@@ -312,6 +317,9 @@ void OmxMoveJControllerNode::moveJCallback(
+     return;
+   }
+
++  const Eigen::VectorXd command_start =
++    smooth_profile_enabled_ ? q_ : q_commanded_;
++
+   movej_start_ = q_commanded_;
+   movej_goal_ = target_q;
+   movej_target_initialized_ = true;
+@@ -319,2 +327,22 @@ void OmxMoveJControllerNode::moveJCallback(
+   latest_movej_command_received_ = true;
++
++  if (smooth_profile_enabled_) {
++    q_commanded_ = command_start;
++    movej_start_ = command_start;
++    const double max_delta = (movej_goal_ - movej_start_).cwiseAbs().maxCoeff();
++    const double velocity_time =
++      1.875 * max_delta / std::max(1.0e-6, smooth_max_velocity_);
++    const double acceleration_time = std::sqrt(
++      5.7735026919 * max_delta / std::max(1.0e-6, smooth_max_acceleration_));
++    const double jerk_time = std::cbrt(
++      60.0 * max_delta / std::max(1.0e-6, smooth_max_jerk_));
++    active_motion_duration_ = std::max(
++      {smooth_min_duration_, duration, velocity_time, acceleration_time, jerk_time});
++    motion_start_time_ = this->now();
++    movej_trajectory_active_ = max_delta > 1.0e-6;
++    RCLCPP_INFO(
++      this->get_logger(),
++      "MoveJ S-curve started: max_delta=%.4f rad, duration=%.3f s",
++      max_delta, active_motion_duration_);
++  }
+ }
+@@ -364,8 +398,28 @@ void OmxMoveJControllerNode::controlLoopCallback()
+     kinematics_solver_->updateState(q_feedback, qdot_);
+     publishCurrentPose(kinematics_solver_->getPose(controlled_link_));
+
+-    const Eigen::VectorXd q_ref = movej_goal_;
+-    const Eigen::VectorXd qdot_ref = Eigen::VectorXd::Zero(movej_start_.size());
++    Eigen::VectorXd q_ref = movej_goal_;
++    Eigen::VectorXd qdot_ref = Eigen::VectorXd::Zero(movej_start_.size());
++    if (smooth_profile_enabled_ && movej_trajectory_active_) {
++      const double elapsed = (this->now() - motion_start_time_).seconds();
++      const double duration = std::max(1.0e-6, active_motion_duration_);
++      const double s = std::clamp(elapsed / duration, 0.0, 1.0);
++      const double s2 = s * s;
++      const double s3 = s2 * s;
++      const double s4 = s3 * s;
++      const double s5 = s4 * s;
++      const double blend = 10.0 * s3 - 15.0 * s4 + 6.0 * s5;
++      const double blend_rate =
++        (30.0 * s2 - 60.0 * s3 + 30.0 * s4) / duration;
++      q_ref = movej_start_ + blend * (movej_goal_ - movej_start_);
++      qdot_ref = blend_rate * (movej_goal_ - movej_start_);
++      if (s >= 1.0) {
++        movej_trajectory_active_ = false;
++        q_ref = movej_goal_;
++        qdot_ref.setZero();
++        RCLCPP_INFO(this->get_logger(), "MoveJ S-curve profile completed.");
++      }
++    }
+
+     const Eigen::VectorXd desired_joint_vel =
+       qdot_ref + kp_joint_ * (q_ref - q_feedback);

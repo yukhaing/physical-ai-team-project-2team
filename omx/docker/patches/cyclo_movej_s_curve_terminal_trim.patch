@@ -1,0 +1,172 @@
+diff --git a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
+--- a/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
++++ b/cyclo_motion_controller_ros/include/cyclo_motion_controller_ros/nodes/omx/omx_movej_controller_node.hpp
+@@ -75,6 +75,13 @@
+   double smooth_min_duration_;
+   double smooth_settle_tolerance_;
+   double smooth_settle_timeout_;
++  bool smooth_terminal_trim_enabled_;
++  double smooth_terminal_trim_stall_velocity_;
++  double smooth_terminal_trim_stall_time_;
++  double smooth_terminal_trim_rate_;
++  double smooth_terminal_trim_max_offset_;
++  double smooth_terminal_trim_timeout_;
++  double smooth_terminal_trim_capture_tolerance_;
+ 
+   std::string urdf_path_;
+   std::string srdf_path_;
+@@ -113,11 +120,16 @@
+   bool movej_trajectory_active_;
+   bool joint_state_timeout_active_ = false;
+   bool smooth_settling_ = false;
++  bool smooth_terminal_trim_stall_tracking_ = false;
++  bool smooth_terminal_trimming_ = false;
+ 
+   rclcpp::Time motion_start_time_;
+   rclcpp::Time last_joint_state_time_;
+   rclcpp::Time smooth_settle_start_time_;
++  rclcpp::Time smooth_terminal_trim_stall_start_time_;
++  rclcpp::Time smooth_terminal_trim_start_time_;
+   double active_motion_duration_;
++  double smooth_terminal_trim_direction_ = 0.0;
+   Eigen::VectorXd movej_start_;
+   Eigen::VectorXd movej_goal_;
+   trajectory_msgs::msg::JointTrajectory latest_movej_command_;
+diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+--- a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
++++ b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+@@ -53,6 +53,18 @@
+   smooth_min_duration_ = this->declare_parameter("smooth_min_duration", 1.0);
+   smooth_settle_tolerance_ = this->declare_parameter("smooth_settle_tolerance", 0.04);
+   smooth_settle_timeout_ = this->declare_parameter("smooth_settle_timeout", 3.0);
++  smooth_terminal_trim_enabled_ =
++    this->declare_parameter("smooth_terminal_trim_enabled", false);
++  smooth_terminal_trim_stall_velocity_ =
++    this->declare_parameter("smooth_terminal_trim_stall_velocity", 0.002);
++  smooth_terminal_trim_stall_time_ =
++    this->declare_parameter("smooth_terminal_trim_stall_time", 0.5);
++  smooth_terminal_trim_rate_ = this->declare_parameter("smooth_terminal_trim_rate", 0.02);
++  smooth_terminal_trim_max_offset_ =
++    this->declare_parameter("smooth_terminal_trim_max_offset", 0.06);
++  smooth_terminal_trim_timeout_ = this->declare_parameter("smooth_terminal_trim_timeout", 5.0);
++  smooth_terminal_trim_capture_tolerance_ =
++    this->declare_parameter("smooth_terminal_trim_capture_tolerance", 0.01);
+ 
+   urdf_path_ = this->declare_parameter("urdf_path", std::string(""));
+   srdf_path_ = this->declare_parameter("srdf_path", std::string(""));
+@@ -351,6 +363,8 @@
+       {smooth_min_duration_, duration, velocity_time, acceleration_time, jerk_time});
+     motion_start_time_ = this->now();
+     smooth_settling_ = false;
++    smooth_terminal_trim_stall_tracking_ = false;
++    smooth_terminal_trimming_ = false;
+     movej_trajectory_active_ = max_delta > 1.0e-6;
+     RCLCPP_INFO(
+       this->get_logger(),
+@@ -424,19 +438,90 @@
+       q_ref = movej_goal_;
+       qdot_ref.setZero();
+       const double actual_error = (movej_goal_ - q_).cwiseAbs().maxCoeff();
++      const auto trim_joint_it = model_joint_index_map_.find("joint3");
+       const double settle_elapsed = (this->now() - smooth_settle_start_time_).seconds();
+-      if (actual_error <= smooth_settle_tolerance_) {
++      if (smooth_terminal_trimming_ && trim_joint_it != model_joint_index_map_.end()) {
++        const int trim_joint_index = trim_joint_it->second;
++        const double trim_elapsed =
++          (this->now() - smooth_terminal_trim_start_time_).seconds();
++        const double trim_offset = std::min(
++          smooth_terminal_trim_max_offset_,
++          smooth_terminal_trim_rate_ * std::max(0.0, trim_elapsed));
++        q_ref[trim_joint_index] =
++          movej_goal_[trim_joint_index] + smooth_terminal_trim_direction_ * trim_offset;
++
++        const double trim_actual_error =
++          movej_goal_[trim_joint_index] - q_[trim_joint_index];
++        const bool nominal_captured =
++          std::abs(trim_actual_error) <= smooth_terminal_trim_capture_tolerance_;
++        const bool nominal_crossed =
++          smooth_terminal_trim_direction_ *
++          (q_[trim_joint_index] - movej_goal_[trim_joint_index]) >= 0.0;
++        if (nominal_captured || nominal_crossed) {
++          smooth_terminal_trimming_ = false;
++          smooth_settling_ = false;
++          smooth_profile_completed = true;
++          RCLCPP_INFO(
++            this->get_logger(),
++            "MoveJ terminal trim captured joint3: error=%.4f rad, offset=%.4f rad",
++            trim_actual_error, trim_offset);
++        } else if (trim_elapsed >= smooth_terminal_trim_timeout_) {
++          smooth_terminal_trimming_ = false;
++          smooth_settling_ = false;
++          smooth_profile_completed = true;
++          RCLCPP_WARN(
++            this->get_logger(),
++            "MoveJ terminal trim timeout: joint3 error=%.4f rad, offset=%.4f rad; holding feedback",
++            trim_actual_error, trim_offset);
++        }
++      } else if (actual_error <= smooth_settle_tolerance_) {
+         smooth_settling_ = false;
+         smooth_profile_completed = true;
++        smooth_terminal_trim_stall_tracking_ = false;
+         RCLCPP_INFO(
+           this->get_logger(), "MoveJ settled: actual max error=%.4f rad", actual_error);
+-      } else if (settle_elapsed >= smooth_settle_timeout_) {
+-        smooth_settling_ = false;
+-        smooth_profile_completed = true;
+-        RCLCPP_WARN(
+-          this->get_logger(),
+-          "MoveJ settle timeout: actual max error=%.4f rad; holding feedback",
+-          actual_error);
++      } else {
++        bool trim_started = false;
++        if (smooth_terminal_trim_enabled_ && trim_joint_it != model_joint_index_map_.end()) {
++          const int trim_joint_index = trim_joint_it->second;
++          const double trim_error =
++            movej_goal_[trim_joint_index] - q_[trim_joint_index];
++          const bool trim_joint_stalled =
++            std::abs(trim_error) > smooth_settle_tolerance_ &&
++            std::abs(qdot_[trim_joint_index]) <= smooth_terminal_trim_stall_velocity_;
++          if (trim_joint_stalled) {
++            if (!smooth_terminal_trim_stall_tracking_) {
++              smooth_terminal_trim_stall_tracking_ = true;
++              smooth_terminal_trim_stall_start_time_ = this->now();
++            } else if (
++              (this->now() - smooth_terminal_trim_stall_start_time_).seconds() >=
++              smooth_terminal_trim_stall_time_)
++            {
++              smooth_terminal_trim_stall_tracking_ = false;
++              smooth_terminal_trimming_ = true;
++              smooth_terminal_trim_start_time_ = this->now();
++              smooth_terminal_trim_direction_ = trim_error >= 0.0 ? 1.0 : -1.0;
++              trim_started = true;
++              RCLCPP_WARN(
++                this->get_logger(),
++                "MoveJ terminal trim started: joint3 error=%.4f rad, direction=%+.0f",
++                trim_error, smooth_terminal_trim_direction_);
++            }
++          } else {
++            smooth_terminal_trim_stall_tracking_ = false;
++          }
++        }
++        if (!trim_started && !smooth_terminal_trimming_ &&
++          settle_elapsed >= smooth_settle_timeout_)
++        {
++          smooth_settling_ = false;
++          smooth_profile_completed = true;
++          smooth_terminal_trim_stall_tracking_ = false;
++          RCLCPP_WARN(
++            this->get_logger(),
++            "MoveJ settle timeout: actual max error=%.4f rad; holding feedback",
++            actual_error);
++        }
+       }
+     }
+ 
+@@ -490,6 +575,8 @@
+   movej_goal_ = q_;
+   movej_trajectory_active_ = false;
+   smooth_settling_ = false;
++  smooth_terminal_trim_stall_tracking_ = false;
++  smooth_terminal_trimming_ = false;
+ }
+ }  // namespace cyclo_motion_controller_ros

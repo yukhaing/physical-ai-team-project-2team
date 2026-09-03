@@ -1,0 +1,52 @@
+movej_place_xy_transfer:
+  ros__parameters:
+    target_topic: /pick_coordinator/place_target
+    movej_topic: /pick_coordinator/commands/place_xy_transfer
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    base_frame: link0
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    staging_positions: [0.0, -0.532389, 0.334964, 1.303389, 0.0]
+    staging_ignored_joint_names: [joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    require_staging: false
+    require_start_at_target: false
+    require_start_pitch: false
+    # Move to the measured place approach point before any place descent.
+    # Do not force the final place pitch in this transfer stage.
+    use_target_z: true
+    target_z: 0.19253
+    z_tolerance: 0.001
+    z_weight: 20000.0
+    min_path_z: 0.110
+    min_final_z: 0.170
+    require_actual_target_z: true
+    # Retain feedback margin for loaded joint hysteresis around the taught Z.
+    actual_target_z_tolerance: 0.020
+    path_samples: 51
+    min_pitch: -3.14159
+    max_pitch: 3.14159
+    preferred_pitch: 0.0
+    pitch_weight: 0.0
+    # The revised place point settled with about 9.2mm of XY residual.
+    max_xy_error: 0.012
+    target_max_age: 300.0
+    # Place-only bound includes about 20mm of additional X adjustment margin
+    # from the revised -46.53mm target; camera pick bounds remain unchanged.
+    min_x: -0.070
+    max_x: 0.32
+    max_abs_y: 0.25
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    xy_weight: 20000.0
+    joint_delta_weight: 0.02
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    # Used for both loaded place approach and empty retract.
+    move_duration: 3.5
+    minimum_completion_time: 4.1
+    joint_tolerance: 0.060
+    settle_time: 0.10
+    timeout: 16.0

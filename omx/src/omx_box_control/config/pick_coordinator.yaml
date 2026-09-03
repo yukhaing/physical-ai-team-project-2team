@@ -1,0 +1,62 @@
+pick_coordinator:
+  ros__parameters:
+    movej_topic: /omx_movej_controller/movej
+    # The GUI orchestrator publishes only an emergency hold trajectory.
+    allowed_movej_publisher_nodes: [sorting_orchestrator]
+    staging_command_topic: /pick_coordinator/commands/staging
+    xy_command_topic: /pick_coordinator/commands/xy
+    pitch_command_topic: /pick_coordinator/commands/pitch
+    pick_descent_command_topic: /pick_coordinator/commands/pick_descent
+    lift_command_topic: /pick_coordinator/commands/lift
+    place_xy_transfer_command_topic: /pick_coordinator/commands/place_xy_transfer
+    place_recovery_command_topic: /pick_coordinator/commands/place_recovery
+    place_rotate_command_topic: /pick_coordinator/commands/place_rotate
+    place_correction_command_topic: /pick_coordinator/commands/place_correction
+    place_descent_command_topic: /pick_coordinator/commands/place_descent
+    joint_states_topic: /joint_states
+    target_topic: /camera_box_target
+    base_frame: link0
+    feedback_timeout: 0.5
+    target_max_age: 30.0
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    gripper_joint_name: gripper_joint_1
+    gripper_action: /gripper_controller/gripper_cmd
+    # Match the reachable open position used by gripper_open.yaml.
+    gripper_open_position: 0.98
+    gripper_closed_position: 0.0
+    gripper_effort: 10.0
+    minimum_open_position: 0.90
+    open_tolerance: 0.05
+    # Accept a stable physical opening if ID16 never terminates the action.
+    open_watchdog_timeout: 2.0
+    open_watchdog_stable_time: 0.50
+    open_watchdog_position_epsilon: 0.003
+    # Empty staging close should reach near the fully closed command.
+    maximum_staging_closed_position: 0.05
+    # Validated successful grasps are 0.293-0.425rad; empty close was 0.028rad.
+    min_grasp_position: 0.15
+    max_grasp_position: 0.70
+    # ID16 can report a nonzero velocity forever after physical box contact.
+    # Accept a position-stable grasp and cancel that non-terminating action.
+    grasp_watchdog_timeout: 3.0
+    grasp_watchdog_stable_time: 0.50
+    grasp_watchdog_position_epsilon: 0.003
+    # Empty staging/final closes can physically finish without terminating ID16.
+    empty_close_watchdog_timeout: 2.0
+    empty_close_watchdog_stable_time: 0.30
+    # Retain one human gate before moving a loaded box.
+    require_grasp_confirmation: true
+    place_correction_trigger_z: 0.100
+    # Taught from measured /joint_states on 2026-08-20.
+    remembered_place_xyz: [-0.02653, -0.17494, 0.19253]
+    # Release 12mm above the former taught pose to clear the basket rim.
+    remembered_place_release_xyz: [-0.02621, -0.17335, 0.15599]
+    place_target_topic: /pick_coordinator/place_target
+    place_release_target_topic: /pick_coordinator/place_release_target
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    # Match the current lower-box pick completion band.
+    recover_grasp_min_z: 0.025
+    recover_grasp_max_z: 0.038
+    # Match the revised higher loaded-lift completion band.
+    recover_lift_min_z: 0.165
+    recover_lift_max_z: 0.195
