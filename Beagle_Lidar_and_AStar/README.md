@@ -1,5 +1,10 @@
 # Beagle LiDAR + A* — Receiving/Defect Shuttle
 
+**This is the final version of the Beagle shuttle mission** — the one used
+for the actual submission/demo. `Beagle/` and `Beagle_mobile_robot/` are
+earlier implementations kept only for development history; they are
+superseded by this folder and should not be used.
+
 Beagle robot mission: idle at a **receiving zone**, wait for a `box_placed`
 signal from the OMX arm, drive to a **defect zone** using A* + Pure Pursuit,
 align precisely against a LiDAR map, wait for a `box_picked` signal once the
@@ -8,8 +13,7 @@ OMX arm has picked the box, then drive back and wait for the next signal.
 Unlike `Beagle_mobile_robot` (dead-reckoning only), this version continuously
 corrects its position against a real LiDAR point-cloud map while driving, and
 does a final precision alignment pass (position + heading) at each zone
-before considering the leg done. This is the current, real-hardware-only
-version of the shuttle mission.
+before considering the leg done. Real-hardware-only, no `--dry-run` mode.
 
 ## Layout
 
@@ -81,6 +85,27 @@ Useful flags on `10_shuttle_mission.py`: `--cycles N` to stop after N round
 trips, `--dynamic-obstacles` to react to obstacles that appear mid-drive
 (off by default, re-verify before relying on it), `--align`/`--align-heading`
 to fall back to older alignment methods for comparison.
+
+## Results
+
+Physical setup (receiving zone top, defect zone bottom, OMX arm and boxes visible):
+
+![physical setup](../photos/beagle_shuttle_결과/Beagle_실제환경사진1.jpg)
+
+10 consecutive round-trip cycles completed without stopping:
+
+![10 cycle success](../photos/beagle_shuttle_결과/Beagle_실행결과_10cycle.png)
+
+OMX-Beagle TCP signal exchange (`box_placed` / `box_picked`):
+
+![omx to beagle signal](../photos/beagle_shuttle_결과/Beagle_omx_to_beagle_신호.png)
+
+A known-limitation case: heading search failed to converge within `max_iters`
+at the defect zone (see Notes below):
+
+![alignment failure case](../photos/beagle_shuttle_결과/Beagle_alignment실패결과.png)
+
+More run logs and setup photos: [`../photos/beagle_shuttle_결과/`](../photos/beagle_shuttle_결과/)
 
 ## Notes
 
