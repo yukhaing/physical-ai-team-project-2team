@@ -11,8 +11,11 @@
 3. 불량 박스를 선택하면 OMX가 집어서 수령 위치의 Beagle 위에 놓는다.
 4. 적재 완료 후 관제가 Beagle에 `box_placed` 신호를 보낸다.
 5. Beagle은 불량 구역으로 이동해 대기한다.
-6. 하역 OMX가 Beagle 위의 박스를 집고, 180도 뒤쪽에 내려놓은 다음 대기 자세로 복귀한다.
-7. 하역 완료를 확인한 관제가 Beagle에 복귀 신호를 보내고 다음 사이클을 허용한다.
+6. 하역 OMX가 Beagle 위의 박스를 집어 안전 높이로 올리면 관제가 현재 작업 ID의
+   `box_picked`를 한 번 전송한다.
+7. Beagle은 수령 위치로 복귀하고, 하역 OMX는 동시에 180도 회전·배출·원위치 복귀를
+   계속한 뒤 그리퍼를 닫는다.
+8. 다음 적재 사이클은 Beagle의 수령 위치 복귀 완료 신호가 들어온 뒤에만 시작한다.
 
 ## 하역 OMX 구성
 
@@ -24,7 +27,11 @@
 4. 같은 상단 Z로 상승한다.
 5. `joint1`을 180도 회전해 반대편 배출 위치로 이동한다.
 6. 수직 하강해 박스를 놓고 다시 상승한다.
-7. 빈 그리퍼를 원위치 방향으로 회전한 뒤 대기 자세로 복귀한다.
+7. 빈 그리퍼를 원위치 방향으로 회전한 뒤 카메라 시야를 가리지 않는 parking 자세로
+   복귀하고 그리퍼를 닫는다.
+
+박스 파지에 실패하면 상승 후 다시 하강하며 최대 2회 재시도한다. 재시도까지 실패하면
+빈 그리퍼를 안전하게 올리고 parking으로 복귀한 뒤 Beagle도 수령 위치로 돌려보낸다.
 
 각 단계는 관절 피드백이 목표 오차 안에 들어온 경우에만 다음 단계로 진행한다. 하역
 OMX는 `/unload_omx` 네임스페이스를 사용하므로 기존 적재 OMX 토픽과 섞이지 않는다.
@@ -41,8 +48,9 @@ ls -l /dev/serial/by-id/
 하역 설정 파일 `config/unload_coordinator.yaml`의 `dry_run` 값으로 실제 명령 전송 여부를
 제어한다.
 별도 OMX의 베이스 설치 위치가 다르면 같은 XY 수치라도 실제 위치가 달라지므로,
-`source_xy`가 Beagle 위 박스 중심과 맞는지 빈 그리퍼로 먼저 확인해야 한다. 현재 초기값은
-기존 적재 OMX의 place 좌표 `[-0.02621, -0.17335]`를 재사용한다.
+`source_xy`가 Beagle 위 박스 중심과 맞는지 빈 그리퍼로 먼저 확인해야 한다. 현재 설정은
+`[0.20814601, -0.02140298]`이며, 정상 운전에서는 저장된 트레이 티칭 값과 현재
+랜드마크 이동량을 적용해 XY를 보정한다.
 
 하역 OMX만 기동해 계획을 확인하는 명령은 다음과 같다.
 
@@ -63,14 +71,18 @@ Beagle 정차 위치, 그리퍼 중심을 확인한 뒤에만 `dry_run: false`�
 ```bash
 OMX_PORT_NAME=/dev/serial/by-id/<적재_OMX_ID> \
 UNLOAD_OMX_PORT_NAME=/dev/serial/by-id/<하역_OMX_ID> \
+OMX_VIDEO_DEVICE=/dev/video0 \
+UNLOAD_VIDEO_DEVICE=/dev/video2 \
+ENABLE_UNLOAD_OMX=true \
 AUTOMATIC_UNLOAD_OMX=true \
 BEAGLE_MODE=local \
 ./docker/container.sh gui-up
 ```
 
 `AUTOMATIC_UNLOAD_OMX=false`이면 하역 OMX가 연결되어 있어도 Beagle 도착 후 기존
-`하역 완료` 버튼을 사용하는 수동 방식이 유지된다. 자동 하역 중 오류가 발생해도 Beagle은
-정지 상태를 유지하고 GUI 버튼이 다시 활성화되어 수동 하역 후 복귀시킬 수 있다.
+`하역 완료` 버튼을 사용하는 수동 방식이 유지된다. 자동 하역 중 박스를 올리기 전에
+오류가 나면 Beagle은 정지 상태를 유지한다. `box_picked` 전송 이후의 오류는 GUI에
+표시하지만 이미 시작한 Beagle 복귀를 중단하거나 같은 신호를 다시 보내지 않는다.
 
 ## Ubuntu 사전 준비
 
@@ -91,20 +103,20 @@ Docker 이미지에는 `fonts-noto-cjk`, `ko_KR.UTF-8` 로케일이 포함되어
 Ubuntu 호스트 터미널에서 실행한다.
 
 ```bash
-cd physical-ai-team-project-2team/omx/docker
-chmod +x container.sh
-./container.sh build
-./container.sh start
-./container.sh enter
+cd /home/itec/omx_box_project_ws
+chmod +x docker/container.sh
+./docker/container.sh build
+./docker/container.sh start
+./docker/container.sh enter
 ```
 
 컨테이너 안에서 OMX 워크스페이스를 빌드한다.
 
 ```bash
-cd /root/omx_box_project_ws
+cd /root/omx_box_project_ws/integration/yeongjin_gui/omx
 source /opt/ros/jazzy/setup.bash
 source /root/ros2_ws/install/setup.bash
-colcon build --symlink-install
+colcon build --base-paths src --symlink-install --packages-select omx_box_control
 source install/setup.bash
 ```
 
@@ -116,26 +128,23 @@ source install/setup.bash
 순서대로 모두 시작할 수 있다.
 
 ```bash
-cd physical-ai-team-project-2team/omx/docker
-./container.sh gui-up
+cd /home/itec/omx_box_project_ws
+./docker/container.sh gui-up
 ```
 
 Beagle 제어 프로그램을 같은 PC에서 실행할 때:
 
 ```bash
-BEAGLE_MODE=local ./container.sh gui-up
-cd ../integration/yeongjin_gui/Beagle_mobile_robot
-python3 missions/receiving_defect_shuttle.py \
-  --trigger-port 8765 --status-host 127.0.0.1 --status-port 9000
+BEAGLE_MODE=local ./docker/container.sh gui-up
 ```
 
 Beagle을 별도 PC에서 실행할 때는 GUI를 다음처럼 시작한다. `auto`는 상태 연결의
 상대 IP를 자동으로 사용하고, 고정 IP가 필요하면 `remote`를 사용한다.
 
 ```bash
-BEAGLE_MODE=auto ./container.sh gui-up
+BEAGLE_MODE=auto ./docker/container.sh gui-up
 # 또는
-BEAGLE_MODE=remote BEAGLE_TRIGGER_HOST=<BEAGLE_PC_IP> ./container.sh gui-up
+BEAGLE_MODE=remote BEAGLE_TRIGGER_HOST=<BEAGLE_PC_IP> ./docker/container.sh gui-up
 ```
 
 배포 방식은 `BEAGLE_MODE`만 바꾸며, 나중에 한 방식을 제거해도 OMX 및 GUI의
@@ -143,22 +152,24 @@ BEAGLE_MODE=remote BEAGLE_TRIGGER_HOST=<BEAGLE_PC_IP> ./container.sh gui-up
 
 이 명령은 다음 항목을 자동으로 실행한다.
 
-1. `zenohd`
-2. OMX-F bringup
-3. Cyclo MoveJ controller
-4. USB 카메라
-5. 통합 관제 GUI
+1. 공용 `zenohd`
+2. 적재 OMX-F bringup과 Cyclo MoveJ controller
+3. 하역 OMX-F bringup, controller와 초기화
+4. 적재·하역 USB 카메라와 역할 라우터
+5. 적재 YOLO와 하역 자연 랜드마크 검출
+6. Beagle adapter와 조건부 로컬 미션
+7. 통합 관제 GUI
 
 실행 상태 확인:
 
 ```bash
-./container.sh gui-status
+./docker/container.sh gui-status
 ```
 
 전체 종료:
 
 ```bash
-./container.sh gui-down
+./docker/container.sh gui-down
 ```
 
 ## 수동 실행
@@ -170,7 +181,7 @@ BEAGLE_MODE=remote BEAGLE_TRIGGER_HOST=<BEAGLE_PC_IP> ./container.sh gui-up
 ```bash
 source /opt/ros/jazzy/setup.bash
 source /root/ros2_ws/install/setup.bash
-source /root/omx_box_project_ws/install/setup.bash
+source /root/omx_box_project_ws/integration/yeongjin_gui/omx/install/setup.bash
 ```
 
 1. Zenoh daemon
@@ -194,10 +205,13 @@ ros2 launch cyclo_motion_controller_ros omx_controller.launch.py \
   config_file:=/root/omx_box_project_ws/docker/config/omx_config_physical.yaml
 ```
 
-4. USB camera
+4. 두 USB camera
 
 ```bash
-ros2 launch open_manipulator_bringup camera_usb_cam.launch.py name:=camera1 video_device:=/dev/video0
+ros2 launch open_manipulator_bringup camera_usb_cam.launch.py \
+  name:=camera_devices/loading video_device:=/dev/video0
+ros2 launch open_manipulator_bringup camera_usb_cam.launch.py \
+  name:=camera_devices/unloading video_device:=/dev/video2
 ```
 
 5. 통합 관제를 시작한다.
@@ -216,8 +230,13 @@ ros2 launch omx_box_control integrated_console.launch.py
 2. `가동`을 눌러 시스템을 활성화한다.
 3. YOLO가 불량 박스를 검출하면 OMX 집기·배치가 자동 진행된다.
 4. OMX가 Beagle 위에 놓기를 완료하면 `box_placed`가 자동 전송된다.
-5. Beagle이 불량 구역을 왕복하는 동안 다음 사이클은 잠긴다.
+5. 하역 OMX가 박스를 집어 올리면 `box_picked`가 자동 전송되고 Beagle과 하역 OMX가
+   병렬로 복귀·배출 동작을 수행한다.
 6. Beagle이 수령 위치로 돌아와 `READY`가 표시되면 다음 박스를 처리한다.
+
+GUI 왼쪽은 적재 영상, 오른쪽은 하역 영상이다. 실제 카메라 연결이 반대이면
+`카메라 맞바꾸기`를 누른다. 두 카메라가 모두 들어올 때만 교환할 수 있으며, 교환 상태는
+다음 `gui-up`에도 복원된다. 수동 박스 선택은 현재 적재 역할 영상에서만 동작한다.
 
 `정지`는 현재 소프트웨어 명령을 취소하고 정지 요청을 보낸다. `비상정지`도 소프트웨어 수준의 요청이므로, 위험 상황에서는 반드시 OMX 장비의 물리 E-stop을 함께 사용한다. 비상정지 뒤에는 하드웨어를 점검하고 `리셋` 후 다시 `가동`한다.
 
@@ -231,11 +250,13 @@ ros2 launch omx_box_control integrated_console.launch.py
 
 ## 문제 해결
 
-- Qt 창이 열리지 않으면 Ubuntu 호스트에서 `echo $DISPLAY`를 확인하고, 컨테이너는 `./container.sh start`로 시작한다. 이 스크립트가 root 사용자에 대한 X11 접근을 설정한다.
+- Qt 창이 열리지 않으면 Ubuntu 호스트에서 `echo $DISPLAY`를 확인하고, 컨테이너는 `./docker/container.sh start`로 시작한다. 이 스크립트가 root 사용자에 대한 X11 접근을 설정한다.
 - 한글이 네모로 표시되면 이미지를 다시 빌드한다. 컨테이너에서 `fc-match "Noto Sans CJK KR"`로 폰트를 확인할 수 있다.
-- YOLO가 시작되지 않으면 컨테이너에서 `/root/omx_box_project_ws/models/best.pt` 존재 여부와 카메라 토픽 `/camera1/image_raw`를 확인한다.
-- `gui-up` 뒤 카메라가 보이지 않으면 `./container.sh gui-status`와 `/root/omx_box_project_ws/logs/gui_stack/integrated_console.log`를 먼저 확인한다.
+- YOLO가 시작되지 않으면 컨테이너에서 `/root/omx_box_project_ws/integration/omx_box_system/models/box_defect_best.pt`와 `/camera/image_raw`를 확인한다.
+- `gui-up` 뒤 카메라가 보이지 않으면 `./docker/container.sh gui-status`와 tmux의
+  `camera_load`, `camera_unload`, `console` 창을 확인한다.
 - `WAIT_BEAGLE`이 계속되면 Beagle 미션의 `--status-host`, TCP 9000 방화벽,
   GUI의 `BEAGLE_MODE`를 확인한다.
 - 상태가 예상보다 빨리 넘어가면 `config/console.yaml`의 `bypass_beagle`, `auto_start_omx`, `auto_continue_pick`, `auto_complete_unload` 값을 먼저 확인한다.
-- 좌표가 실제 작업 위치와 다르면 최신 캘리브레이션 값이 반영되었는지 확인한다. 현재 값은 임시값일 수 있으며, 팀원에게 받은 최종 보정값으로 교체해야 한다.
+- 좌표가 실제 작업 위치와 다르면 `integration/yeongjin_gui/runtime/calibration/`의 최신
+  캘리브레이션과 하역 티칭 값이 반영됐는지 확인한다.

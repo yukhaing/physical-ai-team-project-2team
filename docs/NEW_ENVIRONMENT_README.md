@@ -1,5 +1,10 @@
 # OMX Box Project: 새 작업 환경 실행 안내
 
+> 이 문서는 단일 적재 OMX 개발 환경의 과거 재현 절차다. 현재 듀얼 OMX·Beagle·GUI
+> 통합 환경은 [프로젝트 루트 README](../README.md)와
+> [통합 관제 문서](../integration/yeongjin_gui/integration/DEFECT_TRANSFER_CONSOLE.md)를
+> 따른다.
+
 이 문서는 `cjh-dev` 브랜치를 새로운 PC 또는 새로운 작업 공간에서 받아
 7점 camera calibration부터 YOLO 기반 pick-and-place 검증까지 진행하는
 순서를 정리한 실행 안내서다.
@@ -451,4 +456,3 @@ git status
 git diff --check
 git log -3 --oneline
 ```
-

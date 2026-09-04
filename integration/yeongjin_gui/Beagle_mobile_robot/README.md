@@ -1,4 +1,9 @@
-# Beagle Mobile Robot — Receiving/Defect Shuttle
+# Beagle Mobile Robot — legacy runtime and support code
+
+> 현재 통합 GUI가 실행하는 운행 로직은
+> [`../Beagle_Lidar_and_AStar/scripts/10_shuttle_mission.py`](../Beagle_Lidar_and_AStar/scripts/10_shuttle_mission.py)다.
+> 이 디렉터리는 해당 미션이 사용하는 `.venv`와 기존 지원 코드를 제공한다. 아래 내용은
+> 과거 `missions/receiving_defect_shuttle.py` 단독 실행 설명이다.
 
 Beagle robot mission: idle at a **receiving zone**, wait for a "box placed"
 signal from the OMX arm, drive to a **defect zone**, wait 5 seconds, drive

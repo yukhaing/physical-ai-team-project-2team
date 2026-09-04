@@ -1,5 +1,9 @@
 # OMX 불량 박스 이송 통합 관제
 
+> 이 파일은 초기 통합 기록이다. 현재 운용 절차는
+> [`yeongjin_gui/integration/DEFECT_TRANSFER_CONSOLE.md`](yeongjin_gui/integration/DEFECT_TRANSFER_CONSOLE.md)를
+> 따른다.
+
 이 문서는 YOLO가 검출한 `defect` 박스만 OMX와 Beagle 시나리오로 이송하는
 통합 관제의 현재 구현 상태와 GUI 동작 테스트 절차를 설명한다. Beagle은 TCP
 어댑터를 통해 같은 PC 또는 별도 제어 PC에서 실행할 수 있다.
