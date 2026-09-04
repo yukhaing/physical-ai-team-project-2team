@@ -1,0 +1,12 @@
+camera_role_router:
+  ros__parameters:
+    device_a_topic: /camera_devices/loading/image_raw
+    device_b_topic: /camera_devices/unloading/image_raw
+    loading_role_topic: /camera/image_raw
+    unloading_role_topic: /unload_camera/image_raw
+    status_topic: /camera_roles/status
+    device_a_path: /dev/video0
+    device_b_path: /dev/video2
+    state_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/camera_roles.yaml
+    camera_timeout: 3.0
+

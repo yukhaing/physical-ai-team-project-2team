@@ -1,0 +1,20 @@
+camera_homography_target:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    base_frame: link0
+    target_z: 0.10
+    reference_points_link0: [0.12, -0.10, 0.28, -0.10, 0.28, 0.10, 0.12, 0.10]
+    target_pose_topic: /camera_box_target
+    marker_topic: /camera_box_marker
+    workspace_marker_topic: /camera_workspace_markers
+    workspace_grid_resolution: 0.01
+    workspace_center_x: -0.00999
+    workspace_center_y: 0.0
+    # Derived from the pitch-pregrasp IK at Z=130mm, pitch=70-80deg.
+    safe_reach_radius: 0.280
+    warning_reach_radius: 0.285
+    workspace_marker_z: 0.002
+    # The independent OMX 7-point calibration node writes this runtime file.
+    calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/active.yaml
+    calibration_seed_file: /root/omx_box_project_ws/integration/omx_box_system/calibration/omx_camera_homography_7point.yaml
+    show_window: true

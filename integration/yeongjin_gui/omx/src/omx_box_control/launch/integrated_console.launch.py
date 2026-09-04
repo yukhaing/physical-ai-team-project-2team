@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Start camera/Yolo/operator nodes alongside the existing OMX pick flow."""
+
+from launch import LaunchDescription
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import EnvironmentVariable, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
+
+
+def generate_launch_description():
+    share = FindPackageShare('omx_box_control')
+    config = PathJoinSubstitution([share, 'config', 'console.yaml'])
+    camera_roles = PathJoinSubstitution([share, 'config', 'camera_roles.yaml'])
+    unload_marker = PathJoinSubstitution([share, 'config', 'unload_marker.yaml'])
+    homography = PathJoinSubstitution([share, 'config', 'homography_target.yaml'])
+    pick_launch = PathJoinSubstitution([share, 'launch', 'pick_coordinator.launch.py'])
+    return LaunchDescription([
+        IncludeLaunchDescription(PythonLaunchDescriptionSource(pick_launch)),
+        Node(package='omx_box_control', executable='camera_role_router_node.py',
+             name='camera_role_router', output='screen', parameters=[camera_roles, {
+                 'device_a_path': ParameterValue(
+                     EnvironmentVariable('OMX_VIDEO_DEVICE', default_value='/dev/video0'),
+                     value_type=str),
+                 'device_b_path': ParameterValue(
+                     EnvironmentVariable('UNLOAD_VIDEO_DEVICE', default_value='/dev/video2'),
+                     value_type=str),
+             }]),
+        Node(package='omx_box_control', executable='unload_marker_target_node.py',
+             name='unload_marker_target', output='screen', parameters=[unload_marker]),
+        Node(package='omx_box_control', executable='camera_homography_target_node.py',
+             name='camera_homography_target', output='screen',
+             parameters=[homography, {'show_window': False}]),
+        Node(package='omx_box_control', executable='yolo_detection_node.py',
+             name='yolo_detection', output='screen', parameters=[config]),
+        Node(package='omx_box_control', executable='beagle_adapter_node.py',
+             name='beagle_adapter', output='screen', parameters=[config, {
+                 'connection_mode': ParameterValue(
+                     EnvironmentVariable('BEAGLE_MODE', default_value='auto'),
+                     value_type=str),
+                 'trigger_host': ParameterValue(
+                     EnvironmentVariable('BEAGLE_TRIGGER_HOST', default_value=''),
+                     value_type=str),
+                 'trigger_port': ParameterValue(
+                     EnvironmentVariable('BEAGLE_TRIGGER_PORT', default_value='8765'),
+                     value_type=int),
+                 'status_port': ParameterValue(
+                     EnvironmentVariable('BEAGLE_STATUS_PORT', default_value='9000'),
+                     value_type=int),
+                 'launch_local_mission': ParameterValue(
+                     EnvironmentVariable(
+                         'BEAGLE_LOCAL_MISSION_LAUNCH', default_value='false'),
+                     value_type=bool),
+                 'local_port_name': ParameterValue(
+                     EnvironmentVariable('BEAGLE_LOCAL_PORT_NAME', default_value=''),
+                     value_type=str),
+             }]),
+        Node(package='omx_box_control', executable='sorting_orchestrator_node.py',
+             name='sorting_orchestrator', output='screen', parameters=[config, {
+                 'automatic_unload_omx': ParameterValue(
+                     EnvironmentVariable(
+                         'AUTOMATIC_UNLOAD_OMX', default_value='true'),
+                     value_type=bool),
+             }]),
+        Node(package='omx_box_control', executable='operations_log_node.py',
+             name='operations_log', output='screen', parameters=[config]),
+        Node(package='omx_box_control', executable='omx_console.py',
+             name='omx_console', output='screen'),
+    ])

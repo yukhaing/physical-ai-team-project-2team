@@ -1,0 +1,73 @@
+movej_closed_loop_descent:
+  ros__parameters:
+    target_topic: /camera_box_target
+    movej_topic: /omx_movej_controller/movej
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    base_frame: link0
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    require_staging: false
+    require_start_at_target: true
+    start_xy_tolerance: 0.010
+    # Allow a safely interrupted descent to resume above the measured grasp band.
+    start_min_z: 0.025
+    require_start_pitch: true
+    start_min_pitch: 1.221730476
+    start_max_pitch: 1.605702912
+    use_target_z: true
+    # Current test box is 25mm lower than the preceding setup; lower the
+    # fingertip grasp target and every associated completion gate together.
+    target_z: 0.032
+    z_tolerance: 0.001
+    z_weight: 20000.0
+    min_path_z: 0.025
+    min_final_z: 0.025
+    min_pitch: 1.221730476
+    max_pitch: 1.605702912
+    preferred_pitch: 1.308996939
+    pitch_weight: 2.0
+    path_samples: 51
+    # Low-Z physical tests show about 6-7mm of lateral compliance near 90deg pitch.
+    max_xy_error: 0.007
+    target_max_age: 30.0
+    min_x: 0.08
+    max_x: 0.32
+    max_abs_y: 0.25
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    xy_weight: 20000.0
+    # Descent must favor the local IK branch; joint3/joint4 counter-rotation
+    # produced 17-20mm real Z drops for a 1mm planned Cartesian step.
+    joint_delta_weight: 100.0
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    # Coarse, same-direction descent. Completion is a safe Z interval rather
+    # than an exact point because joint3 has >=0.014 rad load hysteresis.
+    target_z_min: 0.025
+    target_z_max: 0.038
+    # Even this 0.05mm planned step produced about 11-14mm actual motion due
+    # to joint hysteresis, so every step remains feedback-gated.
+    planned_step: 0.00005
+    max_steps: 10
+    # Include the measured 17.8mm first-step response after gripper re-zeroing.
+    max_actual_step: 0.018
+    minimum_actual_progress: 0.0002
+    # Physical validation showed a safe 5.27deg step; allow up to 6deg.
+    max_pitch_step: 0.104719755
+    # Enforce pitch-pregrasp -> fully-open gripper -> descent ordering.
+    gripper_joint_name: gripper_joint_1
+    minimum_open_position: 0.53
+    move_duration: 5.0
+    # Slow profile near the floor; high-Z steps use the adaptive fast profile.
+    minimum_completion_time: 6.0
+    fast_above_target_margin: 0.025
+    fast_move_duration: 3.5
+    fast_minimum_completion_time: 4.5
+    joint_tolerance: 0.04
+    settle_time: 0.30
+    timeout: 15.0
+    # Accept a step from measured FK when joint hysteresis leaves residual error.
+    cartesian_completion_enabled: true

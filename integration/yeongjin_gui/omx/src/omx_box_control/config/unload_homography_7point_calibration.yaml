@@ -1,0 +1,16 @@
+camera_homography_7point_calibration:
+  ros__parameters:
+    image_topic: /unload_camera/image_raw
+    # Measured from the unloading OMX joint1 axis. The model's joint1 axis is
+    # at link0 X=-11.25mm, so 11.25mm has been subtracted from every measured X.
+    # Click P1 through P7 in this exact order.
+    reference_points_link0:
+      [-0.11625, -0.40200,
+       -0.14125,  0.13000,
+        0.32875,  0.13700,
+        0.33375, -0.42000,
+        0.10675, -0.02000,
+       -0.01125, -0.20300,
+        0.18075, -0.26700]
+    output_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/unload_active.yaml
+    warning_mean_error_mm: 8.0

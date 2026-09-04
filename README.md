@@ -1,56 +1,119 @@
-# physical-ai-team-project-2team
-Box defect detection and transfer console
+# OMX Box Project
 
-카메라 영상에서 YOLOv8로 박스를 검출하고, 그중 불량 박스를 관제 GUI에서 선택해
-OMX 로봇팔 적재 흐름으로 넘기고, Beagle 이송 사이클까지 연결한 통합 관제
-프로토타입입니다. 현재 저장소의 중심은 불량 박스 이송 시나리오 검증과 실제
-장비 연동입니다.
+Independent ROS 2 overlay workspace for camera-based OMX-F box targeting.
 
-- **검출/분류**: YOLOv8, Roboflow 데이터셋(Box/Damaged Box, 총 926장) 기반 학습
-- **관제/로봇 제어**: OMX 로봇팔의 기존 pick-and-place 흐름을 GUI와 연결
-- **통합 방식**: 별도 `main_pipeline.py`가 아니라 OMX launch/노드 내부에서
-  YOLO 표시, 선택, 상태 전이, 로봇 흐름을 결합
+새 PC·새 작업 공간에서 처음부터 실행하는 전체 한국어 안내서는
+[`docs/NEW_ENVIRONMENT_README.md`](docs/NEW_ENVIRONMENT_README.md)를 참고한다.
 
-  
-## Team Members
-- [하영진]   — YOLO (detection & classification)
-- [유유카인] — YOLO (detection & classification)
-- [배민서]  — OMX (robot arm control)
-- [최재현]  — OMX (robot arm control)
+## Start the independent development container
 
-## Project Structure
-- `yolo/` — YOLO training, dataset, and detection logic
-- `omx/` — OMX robot arm control code
-- `integration/` — 통합 관제 문서와 YOLO-OMX 연계 설명
-- `docs/` — Team decisions, data contract, and other shared documentation
-- `reports/` — Weekly, individual, and final reports for LMS submission
-- `photos/` — Photos/screenshots attached to reports
-- `results/` — Evaluation results and demo video links
+The project uses `robotis/open-manipulator:5.0.0` as its ROS/OMX base image and
+builds the official `ROBOTIS-GIT/cyclo_control` source into the image. It does
+not mount or build from the host `~/open_manipulator` checkout.
 
-## Setup
-See `yolo/requirements.txt` for Python dependencies.
+```bash
+cd ~/omx_box_project_ws/docker
+./container.sh start
+./container.sh enter
+```
 
-OMX 통합 관제 GUI의 초기 세팅과 실행 방법은 `omx/README.md` 와
-`integration/DEFECT_TRANSFER_CONSOLE.md` 를 우선 참고한다. 현재 OMX 쪽은
-`./container.sh gui-up` 으로 실행에 필요한 프로세스를 한 번에 올릴 수 있다.
+Do not run the original `open_manipulator` container at the same time when a
+physical OMX-F is connected; both containers would have access to the devices.
 
-## Current Status
+## Build inside the project container
 
-### Implemented
-- Qt 기반 통합 관제 GUI
-- YOLO 검출 결과 표시와 불량 박스 선택
-- OMX pick coordinator와 상태 연동
-- Beagle TCP 기반 트리거/상태 연동
-- OMX 적재 후 Beagle 이동, 하역 완료, 복귀 사이클
-- 작업 로그 SQLite 기록
-- Beagle 분리 실행 또는 2-PC 배치 지원
+```bash
+source /opt/ros/jazzy/setup.bash
+cd /root/omx_box_project_ws
+colcon build --symlink-install
+source install/setup.bash
+```
 
-### Using Dummy/Temporary Values
-- 현재 캘리브레이션 값은 실제 환경 기준 최종값이 아니며 임시값 기준으로 테스트
-- 최종 좌표 보정값은 추후 팀원에게 받아 반영 예정
+Cyclo physical configuration is available at:
 
-### To Be Updated Next
-- Beagle 정지/예외 상황 프로토콜 보강
-- 팀원에게 받은 최종 캘리브레이션 값으로 좌표 변환 재검증
-- 테스트용 자동 진행/우회 설정과 실운영 설정 분리
-- 통합 관제 문서와 실운영 문서 경계 재정리
+```text
+/root/omx_box_project_ws/docker/config/omx_config_physical.yaml
+```
+
+## Nodes
+
+- `camera_homography_7point_calibration_node.py`: create the current camera calibration
+- `box_target_pose_bridge_node.py`: validated PoseStamped target to Cyclo MoveL
+- `omx_target_panel`: RViz target-entry and reachable-workspace panel
+
+The camera preview publishes `/camera_box_target`, which is intentionally separate
+from the robot command input `/box_target_pose`.
+
+## Integrated system startup
+
+Zenoh, robot bringup, MoveJ, camera, YOLO target bridge, coordinator, RViz, and the
+status monitor run in separate `tmux` windows inside the Docker container.
+The start command prepares the nodes only; it does not request robot motion.
+
+```bash
+./scripts/start_omx_system.sh
+./scripts/attach_omx_system.sh
+./scripts/status_omx_system.sh
+./scripts/stop_omx_system.sh
+```
+
+Inside `tmux`, use `Ctrl-b` followed by `n`/`p` to change windows and
+`Ctrl-b d` to detach. After checking the physical workspace, begin staging
+explicitly:
+
+```bash
+docker exec -it omx_box_project bash -lc '
+source /opt/ros/jazzy/setup.bash
+source /root/ros2_ws/install/setup.bash
+source /root/omx_box_project_ws/install/setup.bash
+ros2 service call /pick_coordinator/start std_srvs/srv/Trigger "{}"
+'
+```
+
+The defaults are `/dev/ttyACM0` and `/dev/video0`. Override them when needed:
+
+```bash
+OMX_PORT_NAME=/dev/ttyACM1 OMX_VIDEO_DEVICE=/dev/video2 \
+  ./scripts/start_omx_system.sh
+```
+
+The external detector must publish
+`std_msgs/msg/Float64MultiArray` on `/yolo/selected_box` using
+`[is_defect, confidence, x_link0_m, y_link0_m, joint5_rad]`. The bridge accepts
+only a stable, in-workspace defect while the coordinator is waiting for a new
+pick target. It forwards X/Y and a stable joint5 target to `/camera_box_target`.
+The high-Z XY approach moves X/Y and joint5 together; pitch and descent retain
+the achieved gripper angle.
+
+Prepare and run the isolated YOLO detector environment in
+`physical_ai_server`:
+
+```bash
+./scripts/start_yolo_detector.sh
+```
+
+This copies the checked-in model and calibration to `/opt/omx_yolo`, creates a
+separate virtual environment with a ROS-compatible NumPy version, and leaves
+the existing ACT Python environment unchanged. Check it from another terminal:
+
+```bash
+./scripts/status_yolo_detector.sh
+```
+
+`./scripts/status_omx_system.sh` also reports the YOLO publisher. The bridge
+node alone is not considered a complete target source; `/yolo/selected_box`
+must show at least one publisher before robot motion is requested.
+
+For a new physical setup, edit the seven measured `link0` X/Y points in
+`src/omx_box_control/config/homography_7point_calibration.yaml`, rebuild the
+package, and run:
+
+```bash
+ros2 launch omx_box_control camera_homography_7point_calibration.launch.py
+```
+
+Press `c` and click all seven points in configuration order. The generated
+`omx_camera_homography_7point.yaml` is required by the YOLO runtime setup
+script. There is no fallback to an older environment's calibration. This tool only reads images and never
+commands the robot. After saving, click independent check points to preview
+their transformed `link0` X/Y without publishing a target.

@@ -1,0 +1,23 @@
+yolo_target_bridge:
+  ros__parameters:
+    input_topic: /yolo/selected_box
+    output_topic: /camera_box_target
+    coordinator_status_topic: /pick_coordinator/status
+    base_frame: link0
+    target_z: 0.10
+    defect_only: true
+    minimum_confidence: 0.35
+    sample_count: 4
+    maximum_xy_spread: 0.012
+    # YOLO publishes a gripper-axis joint5 target in radians. Four stable
+    # samples are encoded as roll in /camera_box_target orientation.
+    require_joint5: true
+    minimum_joint5: -0.80
+    maximum_joint5: 0.80
+    maximum_joint5_spread: 0.18
+    # A rectangular gripper has an equivalent orientation every 90 degrees.
+    joint5_period: 1.570796327
+    min_x: 0.08
+    max_x: 0.32
+    max_abs_y: 0.25
+    max_radius: 0.31

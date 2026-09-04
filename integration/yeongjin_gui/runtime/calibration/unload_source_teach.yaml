@@ -1,0 +1,7 @@
+# Unloading source teaching: robot pick point relative to Beagle tray.
+taught_source_xy: [0.20814601, -0.02140298]
+reference_landmark_xy: [0.19348626, -0.01767717]
+reference_marker_angle: 0.0000000000
+taught_joint5: -0.0076699039
+taught_tcp_z: 0.18095347
+calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/unload_active.yaml

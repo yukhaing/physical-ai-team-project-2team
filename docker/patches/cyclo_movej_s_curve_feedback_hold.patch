@@ -1,0 +1,33 @@
+diff --git a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+--- a/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
++++ b/cyclo_motion_controller_ros/src/nodes/omx/omx_movej_controller_node.cpp
+@@ -398,6 +398,7 @@ void OmxMoveJControllerNode::controlLoopCallback()
+
+     Eigen::VectorXd q_ref = movej_goal_;
+     Eigen::VectorXd qdot_ref = Eigen::VectorXd::Zero(movej_start_.size());
++    bool smooth_profile_completed = false;
+     if (smooth_profile_enabled_ && movej_trajectory_active_) {
+       const double elapsed = (this->now() - motion_start_time_).seconds();
+       const double duration = std::max(1.0e-6, active_motion_duration_);
+@@ -417,6 +418,7 @@ void OmxMoveJControllerNode::controlLoopCallback()
+         movej_trajectory_active_ = false;
+         q_ref = movej_goal_;
+         qdot_ref.setZero();
++        smooth_profile_completed = true;
+         RCLCPP_INFO(this->get_logger(), "MoveJ S-curve profile completed.");
+       }
+     }
+@@ -438,5 +440,13 @@ void OmxMoveJControllerNode::controlLoopCallback()
+     }
+
+     q_commanded_ = q_feedback + optimal_velocities * time_step_;
++    if (smooth_profile_completed) {
++      // Replace the downstream controller's final target with measured feedback.
++      // This prevents delayed motion after the profile publisher has stopped.
++      q_commanded_ = q_;
++      movej_start_ = q_;
++      movej_goal_ = q_;
++      RCLCPP_INFO(this->get_logger(), "MoveJ S-curve holding measured joint feedback.");
++    }
+     publishTrajectory(q_commanded_);
+   } catch (const std::exception & e) {

@@ -1,0 +1,13 @@
+{
+  "_note": "All x_m/y_m are measured from the room's bottom-left wall corner (0,0), matching rectangle_segments(0, 0, boundary.x_m, boundary.y_m). OMX reference point intentionally omitted for now -- Step 1 only checks go-to-zone position/heading, no OMX-relative disambiguation yet.",
+  "boundary": {
+    "x_m": 0.86,
+    "y_m": 0.70
+  },
+  "zones": {
+    "receiving": {"x_m": 0.35, "y_m": 0.345, "heading_deg": 0.0},
+    "defect": {"x_m": 0.72, "y_m": 0.135, "heading_deg": 180.0,
+               "exclude_deg_range": [-140, -40], "heading_tol_deg": 10.0, "match_sanity_mm": 180}
+  }
+}
+
