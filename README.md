@@ -10,8 +10,7 @@
 - **연동**: OMX ↔ Beagle TCP 신호(box_placed/box_picked)로 동기화, 통합 관제 GUI로 전체 상태 모니터링
 
 ## Final Deliverables
-- 최종 보고서: https://docs.google.com/document/d/1ZYLwjFH5bpli4JXUgVgUy5NOrzNaIBEjNCXDe6DQMnM/edit?usp=sharing
-
+- 최종 보고서: [`reports/final/`](<reports/final/[피지컬AI-2팀] 파손박스 검출 및 분류 시스템 최종보고서.pdf>)
 - 시연 영상: https://youtu.be/ZgOZATNfR4I?si=Yb7ebuxFRUER3OmE
 
 ## Team Members
@@ -27,9 +26,9 @@
 - `Beagle/`, `Beagle_mobile_robot/` — Beagle 이전 버전 구현, `Beagle_Lidar_and_AStar/`로 대체됨 (개발 과정 기록용으로 보존)
 - `integration/` — YOLO-OMX-Beagle 통합 파이프라인, 상태 연동, GUI
 - `docs/` — 팀 의사결정, 데이터 계약 등 공유 문서
-- `reports/` — (현재 비어있음; 최종 보고서는 위 Final Deliverables 링크 참고)
+- `reports/` — LMS 제출용 보고서 (`weekly/`, `individual/`, `final/`)
 - `photos/` — 보고서 첨부 사진/스크린샷
-- `results/` — 평가 결과, 시연 영상 링크
+- `results/` — 평가 결과, 시연 영상 링크 (위 Final Deliverables 참고)
 
 ## Setup
 - YOLO: `yolo/requirements.txt`
