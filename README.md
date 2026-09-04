@@ -1,28 +1,36 @@
 # physical-ai-team-project-2team
-Box detection and sorting
+파손박스 검출 및 분류 시스템 (YOLO + OMX 로봇팔 + Beagle 이동 로봇)
 
-카메라로 촬영한 이미지에서 YOLOv8로 박스를 검출하고 정상(intact)/손상(damaged) 2개 클래스로 분류한 뒤, 검출 결과(클래스, confidence, 로봇 base 기준 좌표)를 OMX 로봇 팔에 전달해 정상 박스와 손상 박스를 각각 다른 위치로 pick-and-place하는 시스템입니다.
+카메라로 촬영한 이미지에서 YOLOv8로 박스를 검출해 정상(intact)/파손(defect) 박스를 분류하고, 좌표 보정을 거쳐 적재 OMX-F가 박스를 집습니다. 파손 박스는 Beagle 이동 로봇이 LiDAR 기반 A*+Pure Pursuit 주행으로 불량 구역까지 운반하고, 하역 OMX-F가 트레이에서 박스를 집어 하역합니다. Beagle은 OMX 로봇팔과 TCP 신호(box_placed / box_picked)로 동기화되어 자동으로 왕복합니다.
 
-- **검출/분류**: YOLOv8, Roboflow 데이터셋(Box/Damaged Box, 총 926장) 기반 학습 
-- **로봇 제어**: OMX 로봇 팔로 검출된 박스를 집어 클래스별 목적지에 배치
-- **연동**: YOLO의 `detect_and_select()`가 반환한 결과를 OMX의 `pick_and_place()`에 전달하는
-  파이프라인으로 두 팀의 코드를 결합 
+- **검출/분류**: YOLOv8 기반 정상/파손 박스 검출
+- **좌표 보정**: 7-point 카메라 Calibration으로 영상 좌표를 로봇 좌표로 변환
+- **로봇팔 제어**: OMX-F 2대 (적재용/하역용), Analytic IK + Cyclo MoveJ로 Pick & Place
+- **이동 로봇**: Beagle — LiDAR + A* + Pure Pursuit 주행, point-cloud map 기반 정밀 정렬(find_pose_via_map)로 zone 도착 정확도 확보
+- **연동**: OMX ↔ Beagle TCP 신호(box_placed/box_picked)로 동기화, 통합 관제 GUI로 전체 상태 모니터링
 
-  
+## Final Deliverables
+- 최종 보고서: https://docs.google.com/document/d/1ZYLwjFH5bpli4JXUgVgUy5NOrzNaIBEjNCXDe6DQMnM/edit?usp=sharing
+
+- 시연 영상: https://youtu.be/ZgOZATNfR4I?si=Yb7ebuxFRUER3OmE
+
 ## Team Members
-- [하영진]   — YOLO (detection & classification)
-- [유유카인] — YOLO (detection & classification)
-- [배민서]  — OMX (robot arm control)
-- [최재현]  — OMX (robot arm control)
+- 배민서 — YOLO 검출 환경 구축, 7-point Calibration, Docker 실행 환경
+- 유유카인 — Beagle LiDAR+A* 주행·정렬 개발, OMX-Beagle 신호연동,YOLOv8 s/m/l 모델 학습·성능 비교 지원
+- 최재현 — OMX Pick Coordinator 연동, Calibration 검증, ROS2/Docker 환경
+- 하영진 — YOLO 모델 구축·비교, 통합 관제 GUI, OMX-Beagle 상태 연동
 
 ## Project Structure
-- `yolo/` — YOLO training, dataset, and detection logic
-- `omx/` — OMX robot arm control code
-- `integration/` — Combined pipeline connecting YOLO output to OMX control
-- `docs/` — Team decisions, data contract, and other shared documentation
-- `reports/` — Weekly, individual, and final reports for LMS submission
-- `photos/` — Photos/screenshots attached to reports
-- `results/` — Evaluation results and demo video links
+- `yolo/` — YOLO 학습, 데이터셋, 검출 로직
+- `omx/` — OMX-F 로봇팔 제어, 좌표 보정, Pick & Place
+- `Beagle_Lidar_and_AStar/` — Beagle 이동 로봇 (LiDAR 기반 A*+Pure Pursuit 주행, zone 정렬, OMX 신호 연동) — 현재 사용 중인 최종 버전
+- `Beagle/`, `Beagle_mobile_robot/` — Beagle 이전 버전 구현 (개발 과정 기록)
+- `integration/` — YOLO-OMX-Beagle 통합 파이프라인, 상태 연동, GUI
+- `docs/` — 팀 의사결정, 데이터 계약 등 공유 문서
+- `reports/` — (현재 비어있음; 최종 보고서는 위 Final Deliverables 링크 참고)
+- `photos/` — 보고서 첨부 사진/스크린샷
+- `results/` — 평가 결과, 시연 영상 링크
 
 ## Setup
-See `yolo/requirements.txt` for Python dependencies.
+- YOLO: `yolo/requirements.txt`
+- Beagle: `Beagle_Lidar_and_AStar/requirements.txt`, 실행법은 `Beagle_Lidar_and_AStar/scripts/10_shuttle_mission.py` 참고

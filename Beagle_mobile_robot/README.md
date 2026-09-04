@@ -59,14 +59,18 @@ mission runs unattended.
    ```powershell
    python missions\receiving_defect_shuttle.py --cycles 1
    ```
-4. Trigger the box-placed signal from wherever the OMX side runs:
+4. Trigger the box-placed signal from wherever the OMX side runs -- a TCP
+   client sending newline-delimited JSON to `--trigger-port` (default 8765):
    ```powershell
-   New-Item -ItemType File -Path signals\box_placed.flag -Force
+   python -c "import socket; s=socket.create_connection(('localhost', 8765)); s.sendall(b'{\"event\": \"box_placed\"}\n')"
    ```
-   (or point `--box-flag <path>` / `mission.box_flag_path` in the config at
-   a shared location if OMX runs on a different machine).
 5. Once a single cycle looks right, drop `--cycles` to run continuously
    until Ctrl+C.
+
+Other useful flags: `--status-host`/`--status-port` to stream status to a
+dashboard, `--visualize` for a live top-down plot, `--output` for the CSV
+mission log path (see `missions/receiving_defect_shuttle.py --help` for the
+full list).
 
 ## Notes
 
