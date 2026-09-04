@@ -1,5 +1,9 @@
 # Beagle Mobile Robot — Receiving/Defect Shuttle
 
+> **Superseded**: this is an earlier implementation, kept for development
+> history. The final version used for submission/demo is
+> [`Beagle_Lidar_and_AStar/`](../Beagle_Lidar_and_AStar/README.md).
+
 Beagle robot mission: idle at a **receiving zone**, wait for a "box placed"
 signal from the OMX arm, drive to a **defect zone**, wait 5 seconds, drive
 back, and wait for the next signal. While driving, a reactive layer routes
@@ -59,43 +63,18 @@ mission runs unattended.
    ```powershell
    python missions\receiving_defect_shuttle.py --cycles 1
    ```
-4. For a standalone test, trigger the same TCP signal used by the OMX adapter:
+4. Trigger the box-placed signal from wherever the OMX side runs -- a TCP
+   client sending newline-delimited JSON to `--trigger-port` (default 8765):
    ```powershell
-   $client = [Net.Sockets.TcpClient]::new("127.0.0.1", 8765)
-   $writer = [IO.StreamWriter]::new($client.GetStream())
-   $writer.WriteLine('{"event":"box_placed"}'); $writer.Flush(); $client.Close()
+   python -c "import socket; s=socket.create_connection(('localhost', 8765)); s.sendall(b'{\"event\": \"box_placed\"}\n')"
    ```
 5. Once a single cycle looks right, drop `--cycles` to run continuously
    until Ctrl+C.
 
-## OMX GUI connection
-
-The mission and GUI communicate with newline-delimited JSON over two TCP
-ports. The protocol is identical for local and two-PC operation, so changing
-deployment does not change the mission or OMX state machine.
-
-Run Beagle control on the same Ubuntu PC:
-
-```bash
-python3 missions/receiving_defect_shuttle.py \
-  --trigger-port 8765 --status-host 127.0.0.1 --status-port 9000
-```
-
-Run Beagle control on another PC (replace the address with the Ubuntu GUI PC):
-
-```powershell
-python missions\receiving_defect_shuttle.py `
-  --trigger-port 8765 --status-host <GUI_PC_IP> --status-port 9000
-```
-
-The GUI adapter listens on TCP 9000 and sends `box_placed` to the mission's
-TCP 8765. Allow inbound TCP 8765 on the Beagle-control PC and inbound TCP 9000
-on the GUI PC. Start this mission before pressing `가동`; its one-second
-heartbeat tells the GUI that Beagle is waiting at the receiving zone.
-
-To temporarily operate OMX without Beagle, set `bypass_beagle: true` in
-`omx/src/omx_box_control/config/console.yaml`. This keeps the Beagle transport
-optional and removable without changing the OMX pick/place implementation.
+Other useful flags: `--status-host`/`--status-port` to stream status to a
+dashboard, `--visualize` for a live top-down plot, `--output` for the CSV
+mission log path (see `missions/receiving_defect_shuttle.py --help` for the
+full list).
 
 ## Notes
 
