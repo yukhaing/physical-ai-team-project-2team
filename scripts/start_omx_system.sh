@@ -30,7 +30,7 @@ docker exec "${CONTAINER}" bash -lc \
   'source /opt/ros/jazzy/setup.bash && source /root/ros2_ws/install/setup.bash && cd /root/omx_box_project_ws && colcon build --packages-select omx_box_control --symlink-install'
 
 docker exec -it \
-  -e OMX_PORT_NAME="${OMX_PORT_NAME:-/dev/ttyACM0}" \
+  -e OMX_PORT_NAME="${OMX_PORT_NAME:-auto}" \
   -e OMX_VIDEO_DEVICE="${OMX_VIDEO_DEVICE:-/dev/video0}" \
   "${CONTAINER}" \
   /root/omx_box_project_ws/scripts/omx_system_container.sh start

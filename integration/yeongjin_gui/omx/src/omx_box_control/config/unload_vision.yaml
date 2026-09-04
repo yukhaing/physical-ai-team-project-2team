@@ -1,0 +1,30 @@
+unload_vision_target:
+  ros__parameters:
+    image_topic: /unload_camera/image_raw
+    target_topic: /unload_omx/vision_target
+    raw_target_topic: /unload_omx/vision_raw_target
+    annotated_image_topic: /unload_vision/annotated_image
+    status_topic: /unload_vision/status
+    base_frame: link0
+    model_path: /root/omx_box_project_ws/integration/omx_box_system/models/box_defect_best.pt
+    calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/unload_active.yaml
+    confidence_threshold: 0.40
+    device: cpu
+    # The delivered box should be defect. Accept normal as a detector fallback,
+    # but select only a box close to the calibrated Beagle receiving position.
+    target_classes: [defect, normal]
+    expected_source_xy: [-0.02621, -0.17335]
+    teach_profile_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/unload_source_teach.yaml
+    maximum_source_offset: 0.10
+    minimum_reach_radius: 0.10
+    maximum_reach_radius: 0.29
+    stability_samples: 5
+    maximum_xy_spread: 0.012
+    maximum_angle_spread: 0.18
+    # Position remains usable when contour angle extraction is temporarily weak.
+    require_angle: false
+    fallback_joint5: 0.0
+    minimum_joint5: -0.80
+    maximum_joint5: 0.80
+    joint5_offset_deg: 2.00255
+    angle_min_contour_area: 1000.0

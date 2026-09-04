@@ -1,0 +1,87 @@
+/**/unload_coordinator:
+  ros__parameters:
+    # These relative topics resolve inside the /unload_omx namespace.
+    movej_topic: omx_movej_controller/movej
+    joint_states_topic: joint_states
+    gripper_action: gripper_controller/gripper_cmd
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    gripper_joint_name: gripper_joint_1
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+    staging_positions: [0.008422, -0.387875, -0.181383, 1.639417, 0.0]
+    parking_positions: [0.067495, -2.009515, 1.713457, 1.647495, -0.067495]
+
+    # Initial source pose: reuse the validated loading OMX place/release pose.
+    # Re-teach source_xy if the second OMX base is not geometrically symmetric.
+    source_xy: [0.20814601, -0.02140298]
+    teach_profile_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/unload_source_teach.yaml
+    vision_target_topic: vision_target
+    require_vision_target: true
+    # Allow the brief marker occlusion/jitter while Beagle finishes docking.
+    vision_target_timeout: 2.0
+    vision_target_frame: link0
+    maximum_vision_offset: 0.10
+    minimum_target_radius: 0.10
+    maximum_target_radius: 0.29
+    # Z is never taken from the monocular camera. Reuse the loading OMX's
+    # validated Beagle place approach and release/contact TCP heights exactly.
+    source_approach_z: 0.19253
+    # Pick 5 mm below the last tested grasp height.
+    source_grasp_z: 0.14099
+    destination_rotation: 3.141592654
+    # Rear floor placement uses its own absolute TCP height.
+    destination_release_z: 0.022
+    joint5_position: 0.0
+    minimum_pitch: 1.047197551
+    maximum_pitch: 1.483529864
+    preferred_pitch: 1.221730476
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+    path_samples: 101
+    minimum_transfer_path_z: 0.110
+    minimum_source_vertical_path_z: 0.140
+    minimum_destination_vertical_path_z: 0.000
+    maximum_ik_error: 0.006
+
+    move_duration: 13.0
+    rotate_duration: 19.0
+    vertical_duration: 3.0
+    destination_vertical_duration: 10.0
+    staging_duration: 13.0
+    # Return-only segments are faster; initial staging and all pick/descent
+    # motions above retain their validated durations.
+    return_staging_duration: 9.0
+    parking_duration: 12.0
+    maximum_start_joint_delta: 2.0
+    joint_tolerance: 0.060
+    settle_time: 0.15
+    move_timeout_margin: 5.0
+    # Retry only the post-release/abort return pose once when servo feedback
+    # settles just outside the ordinary motion tolerance.
+    return_trim_retry_limit: 1
+    return_trim_duration: 6.0
+    # The folded parking pose repeatedly settles around 9deg short on joint3.
+    # After the bounded trim, accept this camera-clear empty-arm pose so the
+    # mandatory final gripper close is never skipped.
+    parking_completion_tolerance: 0.18
+    feedback_timeout: 0.5
+
+    # Open slightly wider while retaining clearance inside the Beagle tray.
+    gripper_open_position: 0.65
+    gripper_closed_position: 0.0
+    gripper_effort: 10.0
+    minimum_open_position: 0.53
+    # A nearly closed gripper is an empty grasp. Valid unload box contact was
+    # observed well above this boundary (about 0.385rad).
+    min_grasp_position: 0.15
+    max_grasp_position: 0.70
+    maximum_final_closed_position: 0.05
+    # Initial grasp plus at most two lift/open/descend retry attempts.
+    max_pick_retries: 2
+    gripper_watchdog_timeout: 2.5
+    gripper_watchdog_stable_time: 0.50
+    gripper_position_epsilon: 0.003
+
+    # Physical unloading OMX 0B4ABF... was detected and its planned cycle passed
+    # joint-limit/path-height preflight. Automatic GUI triggering remains separate.
+    dry_run: false

@@ -1,0 +1,103 @@
+yolo_detection:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    annotated_image_topic: /console/annotated_image
+    detections_topic: /console/detections
+    selection_topic: /console/selected_box
+    pixel_selection_topic: /console/select_pixel
+    model_path: /root/omx_box_project_ws/integration/omx_box_system/models/box_defect_best.pt
+    confidence_threshold: 0.50
+    device: cpu
+    auto_select_defect: true
+    auto_select_min_interval_sec: 8.0
+    angle_calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/active.yaml
+    angle_min_contour_area: 1000.0
+    joint5_offset_deg: 2.00255
+    joint5_sample_count: 4
+    joint5_period: 1.570796327
+    maximum_joint5_spread: 0.18
+    minimum_joint5: -0.80
+    maximum_joint5: 0.80
+
+beagle_adapter:
+  ros__parameters:
+    # auto: learn the remote IP from its status connection
+    # local: use 127.0.0.1, remote: use trigger_host (or auto-discover fallback)
+    connection_mode: auto
+    trigger_host: ""
+    trigger_port: 8765
+    status_bind_host: 0.0.0.0
+    status_port: 9000
+    connect_timeout: 2.0
+    retry_interval: 2.0
+    # TCP 접속만으로는 실제 Beagle 연결로 표시하지 않는다. 미션 heartbeat가
+    # 이 시간 동안 끊기면 GUI와 오케스트레이터는 연결 끊김으로 전환한다.
+    status_heartbeat_timeout: 3.0
+    # Safety default: do not let roboid auto-probe OMX's serial port when a
+    # physical Beagle is absent. Enable only with a dedicated Beagle device.
+    launch_local_mission: false
+    local_python: /root/omx_box_project_ws/integration/yeongjin_gui/Beagle_mobile_robot/.venv/bin/python
+    local_mission: /root/omx_box_project_ws/integration/yeongjin_gui/Beagle_Lidar_and_AStar/scripts/10_shuttle_mission.py
+    local_output: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/beagle_shuttle.csv
+    local_process_log: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/beagle_reconnect.log
+
+sorting_orchestrator:
+  ros__parameters:
+    bypass_beagle: false
+    require_beagle_ready: true
+    # One-button operation: after 가동, automatically run a detected defect cycle.
+    auto_start_omx: true
+    auto_continue_pick: true
+    # Wait at the defect zone until the operator presses the GUI 하역 완료 button.
+    auto_complete_unload: false
+    # Enable only after the second OMX pose is dry-run checked and dry_run=false.
+    automatic_unload_omx: true
+    unload_omx_status_topic: /unload_omx/unload_coordinator/status
+    # Keep Beagle stopped and retry only with a fresh landmark target when the
+    # camera view is briefly obscured at defect-zone arrival.
+    unload_vision_retry_interval: 0.5
+    unload_vision_retry_timeout: 8.0
+    continuous_operation: true
+    # While Beagle returns after 하역 완료, retain the latest stable defect and
+    # start OMX's next pick. Final placement remains gated by Beagle idle.
+    # Use the GUI detector because it carries pixel coordinates and joint5.
+    # The legacy /yolo/selected_box Float64 bridge lacks both and races it.
+    accept_external_yolo: false
+    # A failed grasp cancels the current job and reopens detection automatically.
+    auto_recover_failed_cycle: true
+    failure_ready_delay: 1.0
+    # Strong gripper contact confirms ordinary boxes directly. Near-closed thin
+    # boxes fall back to a tighter consecutive-frame camera check.
+    verification_gripper_joint_name: gripper_joint_1
+    post_transfer_grasp_confirm_min_position: 0.15
+    post_transfer_grasp_confirm_max_position: 0.70
+    post_transfer_verify_radius_px: 25.0
+    post_transfer_verify_min_frames: 4
+    post_transfer_verify_match_frames: 3
+    post_transfer_verify_timeout: 2.0
+    # Stop is accepted only between cycles, then returns to validated bringup HOME.
+    home_joint_names: [joint1, joint2, joint3, joint4, joint5]
+    home_positions: [0.0, -1.57, 1.57, 1.57, 0.0]
+    home_move_duration: 5.0
+    home_minimum_completion_time: 5.0
+    home_joint_tolerance: 0.15
+    home_settle_time: 0.20
+    home_timeout: 12.0
+    # Retry one near-HOME timeout for both normal cycles and operator reset.
+    reset_home_retry_limit: 1
+    # If E-stop interrupted Beagle placement, reset first retracts to the
+    # measured high place approach (about 192.5mm), then returns to folded HOME.
+    # It opens and closes the gripper only after HOME so a retained box is
+    # released without sweeping through the Beagle loading box. Use the same
+    # verified opening as both OMX coordinators and hold it until the box clears.
+    reset_gripper_open_position: 0.98
+    reset_gripper_closed_position: 0.0
+    reset_gripper_effort: 10.0
+    reset_gripper_min_open_position: 0.53
+    reset_gripper_max_closed_position: 0.05
+    reset_gripper_open_dwell: 2.0
+    reset_gripper_timeout: 4.0
+
+operations_log:
+  ros__parameters:
+    database_path: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/logs/operations.sqlite3

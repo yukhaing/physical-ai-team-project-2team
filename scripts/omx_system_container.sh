@@ -4,8 +4,25 @@ set -Eeuo pipefail
 SESSION="omx_system"
 WORKSPACE="/root/omx_box_project_ws"
 LOG_DIR="${WORKSPACE}/log/system"
-PORT_NAME="${OMX_PORT_NAME:-/dev/ttyACM0}"
+PORT_NAME="${OMX_PORT_NAME:-auto}"
 VIDEO_DEVICE="${OMX_VIDEO_DEVICE:-/dev/video0}"
+
+resolve_omx_port() {
+  local candidates=()
+  if [[ -n "${PORT_NAME}" && "${PORT_NAME}" != "auto" ]]; then
+    return 0
+  fi
+  shopt -s nullglob
+  candidates=(/dev/serial/by-id/usb-ROBOTIS_OpenRB-150_*-if00)
+  shopt -u nullglob
+  if (( ${#candidates[@]} != 1 )); then
+    echo "ERROR: expected exactly one ROBOTIS OpenRB-150, found ${#candidates[@]}." >&2
+    echo "Set OMX_PORT_NAME explicitly if the controller uses a different device." >&2
+    exit 1
+  fi
+  PORT_NAME="${candidates[0]}"
+  echo "Detected OMX controller: ${PORT_NAME} -> $(readlink -f "${PORT_NAME}")"
+}
 
 source_ros() {
   # ROS/ament setup scripts reference optional variables that may be unset.
@@ -93,6 +110,7 @@ start_system() {
     exit 1
   }
   source_ros
+  resolve_omx_port
 
   if tmux has-session -t "${SESSION}" 2>/dev/null; then
     echo "ERROR: tmux session '${SESSION}' is already running." >&2

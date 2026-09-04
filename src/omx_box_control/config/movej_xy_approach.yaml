@@ -33,11 +33,11 @@ movej_xy_approach:
     target_joint5_min: -0.80
     target_joint5_max: 0.80
     maximum_joint5_delta: 1.60
-    move_duration: 5.5
-    minimum_completion_time: 6.5
+    move_duration: 4.3
+    minimum_completion_time: 5.0
     # Match the measured joint3 load-direction deadband used by staging.
     # Physical validation on 2026-08-06 reached 4.25 mm Cartesian XY error
     # while the remaining maximum joint error was 0.0447 rad.
     joint_tolerance: 0.05
-    settle_time: 0.15
+    settle_time: 0.10
     timeout: 16.0

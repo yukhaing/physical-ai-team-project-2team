@@ -3,9 +3,14 @@ FROM robotis/open-manipulator:5.0.0
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-noto-cjk \
+    locales \
     python3-opencv \
     python3-numpy \
+    python3-pip \
+    python3-pyqt5 \
     python3-scipy \
+    python3-venv \
     python3-vcstool \
     tmux \
     ros-jazzy-cv-bridge \
@@ -14,6 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-rmw-zenoh-cpp \
     ros-jazzy-usb-cam \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv --system-site-packages /opt/ultralytics-venv && \
+    /opt/ultralytics-venv/bin/pip install --no-cache-dir --upgrade pip 'setuptools<80' wheel && \
+    /opt/ultralytics-venv/bin/pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
+    /opt/ultralytics-venv/bin/pip install --no-cache-dir 'numpy<2' ultralytics
 
 ARG CYCLO_CONTROL_COMMIT=ceffbd7562028f6b317e462911e2a0991b9ba735
 RUN cd /root/ros2_ws/src && \

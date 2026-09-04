@@ -1,0 +1,32 @@
+unload_marker_target:
+  ros__parameters:
+    image_topic: /unload_camera/image_raw
+    target_topic: /unload_omx/vision_target
+    raw_target_topic: /unload_omx/vision_raw_target
+    annotated_image_topic: /unload_vision/annotated_image
+    status_topic: /unload_vision/status
+    base_frame: link0
+    calibration_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/unload_active.yaml
+    teach_profile_file: /root/omx_box_project_ws/integration/yeongjin_gui/runtime/calibration/unload_source_teach.yaml
+    teaching_mode: false
+    landmark_mode: tray
+    dictionary_name: DICT_4X4_50
+    marker_id: 0
+    tray_gray_threshold: 55
+    tray_roi_min_y: 210
+    tray_min_area: 10000.0
+    tray_max_area: 30000.0
+    tray_min_size: 100.0
+    tray_max_size: 220.0
+    minimum_marker_radius: 0.05
+    maximum_marker_radius: 0.40
+    minimum_reach_radius: 0.10
+    maximum_reach_radius: 0.29
+    stability_samples: 7
+    maximum_xy_spread: 0.005
+    maximum_angle_spread: 0.035
+    # Beagle normally docks within about 10mm. Reject abnormal arrivals.
+    maximum_marker_shift: 0.030
+    maximum_marker_rotation: 0.087266463
+    minimum_joint5: -0.80
+    maximum_joint5: 0.80

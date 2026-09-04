@@ -6,3 +6,6 @@ __pycache__/
 *.orig
 *.rej
 calibration/*.yaml
+.venv/
+**/runtime/logs/
+*.sqlite3

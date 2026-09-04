@@ -1,0 +1,67 @@
+movej_single_ptp_place_descent:
+  ros__parameters:
+    # Taught place descent: one joint-space PTP from the high approach point.
+    target_topic: /pick_coordinator/place_release_target
+    movej_topic: /pick_coordinator/commands/place_descent
+    joint_states_topic: /joint_states
+    controller_error_topic: /omx_movej_controller/controller_error
+    base_frame: link0
+    dry_run: true
+    joint_names: [joint1, joint2, joint3, joint4, joint5]
+    joint_lower: [-4.71239, -2.0944, -2.0944, -1.74533, -4.71239]
+    joint_upper: [6.28319, 1.5708, 1.5708, 1.74533, 4.71239]
+    joint_limit_margin: 0.06
+
+    require_staging: false
+    require_start_at_target: true
+    start_xy_tolerance: 0.015
+    start_min_z: 0.165
+    require_start_pitch: false
+
+    use_target_z: true
+    # Release 7mm below the previous 145.99mm Beagle placement pose.
+    target_z: 0.13899
+    z_tolerance: 0.001
+    z_weight: 20000.0
+    # Allow the measured tracking position up to 6mm below the target while
+    # retaining a hard lower stop for the descent path and completion check.
+    target_z_min: 0.133
+    target_z_max: 0.155
+    min_path_z: 0.133
+    min_final_z: 0.133
+    # 192.53mm approach to 138.99mm release is a 53.54mm descent.
+    minimum_descent: 0.020
+    maximum_descent: 0.070
+
+    # The revised high place point reaches about 68deg with joint4 near its
+    # upper margin. Keep the release close to that feasible posture instead of
+    # forcing the former 82.27deg taught pose.
+    min_pitch: 1.099557429
+    max_pitch: 1.396263402
+    preferred_pitch: 1.221730476
+    pitch_weight: 2.0
+    xy_weight: 20000.0
+    joint_delta_weight: 1.0
+    candidate_xy_slack: 0.0005
+    height_reward: 0.0
+    path_samples: 101
+    max_xy_error: 0.008
+    max_path_xy_deviation: 0.030
+    target_max_age: 300.0
+    # Place-only bound includes margin for further negative-X adjustment.
+    min_x: -0.070
+    max_x: 0.32
+    max_abs_y: 0.25
+    fk_position_bias: [0.00126, 0.0, 0.00055]
+
+    gripper_joint_name: gripper_joint_1
+    gripper_gate_mode: grasp
+    min_grasp_position: 0.005
+    max_grasp_position: 0.70
+
+    # Use the validated responsive PTP request; controller dynamic limits remain active.
+    move_duration: 1.0
+    minimum_completion_time: 2.0
+    joint_tolerance: 0.050
+    settle_time: 0.15
+    timeout: 9.0

@@ -1,0 +1,36 @@
+/**/omx_movej_controller:
+  ros__parameters:
+    control_frequency: 100.0
+    time_step: 0.01
+    trajectory_time: 0.0
+    kp_joint: 50.0
+    weight_joint_tracking: 10.0
+    weight_damping: 0.001
+    slack_penalty: 1000.0
+    cbf_alpha: 5.0
+    collision_buffer: 0.01
+    collision_safe_distance: 0.005
+    smooth_profile_enabled: true
+    # Unload-only caps: allow 19s 180deg rotations and faster empty return.
+    # Pick/vertical commands retain longer requested durations in the coordinator.
+    smooth_max_velocity: 0.32
+    smooth_max_acceleration: 0.50
+    smooth_max_jerk: 1.30
+    smooth_min_duration: 1.0
+    smooth_settle_tolerance: 0.04
+    smooth_settle_timeout: 3.0
+    smooth_terminal_trim_enabled: true
+    smooth_terminal_trim_stall_velocity: 0.002
+    smooth_terminal_trim_stall_time: 0.5
+    smooth_terminal_trim_rate: 0.02
+    smooth_terminal_trim_max_offset: 0.06
+    smooth_terminal_trim_timeout: 5.0
+    smooth_terminal_trim_capture_tolerance: 0.01
+    base_frame: link0
+    controlled_link: end_effector_link
+    # Absolute topics keep the second controller isolated from the loading OMX.
+    joint_states_topic: /unload_omx/joint_states
+    joint_command_topic: /unload_omx/arm_controller/joint_trajectory
+    movej_topic: ~/movej
+    ee_pose_topic: ~/current_pose
+    controller_error_topic: ~/controller_error

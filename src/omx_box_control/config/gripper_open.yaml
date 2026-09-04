@@ -7,8 +7,11 @@ gripper_open:
     dry_run: true
     arm_joint_names: [joint1, joint2, joint3, joint4, joint5]
     gripper_joint_name: gripper_joint_1
-    open_position: 1.0
-    minimum_open_position: 0.80
+    # The new environment reaches about 0.986rad at the physical open limit.
+    # Command slightly inside that limit so the controller's 0.01rad goal
+    # tolerance can complete without reporting a stall/abort.
+    open_position: 0.98
+    minimum_open_position: 0.90
     open_tolerance: 0.05
     # ID16 can retain a small nonzero velocity after reaching the open stop.
     open_watchdog_timeout: 2.0

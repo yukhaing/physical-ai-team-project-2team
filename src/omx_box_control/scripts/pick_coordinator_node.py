@@ -38,6 +38,7 @@ class PickCoordinator(Node):
     WAIT_PLACE_CORRECTION = 'WAIT_PLACE_LIFT_CORRECTION'
     WAIT_PLACE_DESCENT = 'WAIT_PLACE_DESCENT'
     WAIT_PLACE_OPEN = 'WAIT_PLACE_GRIPPER_OPEN'
+    WAIT_PLACE_RETRACT = 'WAIT_PLACE_RETRACT'
     WAIT_RETURN_STAGING = 'WAIT_RETURN_STAGING'
     WAIT_FINAL_CLOSE = 'WAIT_FINAL_GRIPPER_CLOSE'
     COMPLETE = 'COMPLETE'
@@ -166,7 +167,8 @@ class PickCoordinator(Node):
             'pitch': (self.WAIT_PITCH,),
             'pick_descent': (self.WAIT_PICK_DESCENT,),
             'lift': (self.WAIT_LIFT,),
-            'place_xy_transfer': (self.WAIT_PLACE_XY_TRANSFER,),
+            'place_xy_transfer': (
+                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT),
             'place_recovery': (self.WAIT_PLACE_RECOVERY,),
             'place_rotate': (self.WAIT_PLACE_ROTATE,),
             'place_correction': (self.WAIT_PLACE_CORRECTION,),
@@ -384,7 +386,8 @@ class PickCoordinator(Node):
             'pick_open': (self.WAIT_PICK_OPEN,),
             'pick_descent': (self.WAIT_PICK_DESCENT,),
             'lift': (self.WAIT_LIFT,),
-            'place_xy_transfer': (self.WAIT_PLACE_XY_TRANSFER,),
+            'place_xy_transfer': (
+                self.WAIT_PLACE_XY_TRANSFER, self.WAIT_PLACE_RETRACT),
             'place_recovery': (self.WAIT_PLACE_RECOVERY,),
             'place_rotate': (self.WAIT_PLACE_ROTATE,),
             'place_correction': (self.WAIT_PLACE_CORRECTION,),
@@ -429,6 +432,13 @@ class PickCoordinator(Node):
             self.command_gripper(False, self.WAIT_PICK_CLOSE, 'pick gripper close')
             return
         if key == 'place_xy_transfer':
+            if self.state == self.WAIT_PLACE_RETRACT:
+                ok, result = self.request(
+                    'staging', self.WAIT_RETURN_STAGING,
+                    'return staging after place retract')
+                if not ok:
+                    self.fail(result)
+                return
             self.publish_place_release_target()
             ok, result = self.request(
                 'place_descent', self.WAIT_PLACE_DESCENT,
@@ -601,6 +611,14 @@ class PickCoordinator(Node):
             opening and next_state == self.WAIT_PLACE_OPEN and
             wrapped.status == GoalStatus.STATUS_CANCELED and
             self.open_watchdog_accept_cancel)
+        measured = self.positions.get(self.p('gripper_joint_name'))
+        accepted_stalled_open = (
+            opening and next_state == self.WAIT_PLACE_OPEN and
+            wrapped.status == GoalStatus.STATUS_ABORTED and
+            bool(result.stalled) and measured is not None and
+            float(measured) >= float(self.p('minimum_open_position')) and
+            abs(float(measured) - float(self.p('gripper_open_position'))) <=
+            float(self.p('open_tolerance')))
         self.gripper_goal_handle = None
         self.grasp_watchdog_started = None
         self.grasp_watchdog_stable_since = None
@@ -615,7 +633,7 @@ class PickCoordinator(Node):
         if (wrapped.status != GoalStatus.STATUS_SUCCEEDED and
                 not accepted_grasp_stall and not accepted_watchdog_grasp and
                 not accepted_watchdog_empty_close and
-                not accepted_watchdog_open):
+                not accepted_watchdog_open and not accepted_stalled_open):
             self.fail(f'{description} action status={wrapped.status}')
             return
         position = self.positions.get(self.p('gripper_joint_name'))
@@ -628,9 +646,13 @@ class PickCoordinator(Node):
                 return
             if accepted_watchdog_open:
                 self.report(f'accepted watchdog open at {position:.4f}rad')
+            if accepted_stalled_open:
+                self.report(f'accepted stalled open at {position:.4f}rad')
             if next_state == self.WAIT_PLACE_OPEN:
+                self.publish_place_target()
                 ok, result = self.request(
-                    'staging', self.WAIT_RETURN_STAGING, 'return staging')
+                    'place_xy_transfer', self.WAIT_PLACE_RETRACT,
+                    'place retract to high approach')
                 if not ok:
                     self.fail(result)
             return

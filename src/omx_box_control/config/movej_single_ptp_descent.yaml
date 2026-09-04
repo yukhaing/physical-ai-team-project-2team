@@ -59,7 +59,7 @@ movej_single_ptp_descent:
     # Physical tests from the short 35.7mm approach were smoothest at 1 second.
     # The MoveJ controller may retime this upward to satisfy its dynamic limits.
     move_duration: 1.0
-    minimum_completion_time: 4.0
+    minimum_completion_time: 2.0
     joint_tolerance: 0.050
-    settle_time: 0.30
+    settle_time: 0.15
     timeout: 9.0

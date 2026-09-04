@@ -1,0 +1,3 @@
+swapped: false
+device_a: /dev/video0
+device_b: /dev/video2

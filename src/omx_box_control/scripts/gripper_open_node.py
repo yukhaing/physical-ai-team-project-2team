@@ -220,11 +220,19 @@ class GripperOpen(Node):
         except Exception as error:
             self.report(f'FAILED: gripper result error: {error}')
             return
+        measured = self.positions.get(self.p('gripper_joint_name'))
         accepted_watchdog_open = (
             wrapped.status == GoalStatus.STATUS_CANCELED and
             self.watchdog_accept_cancel)
-        measured = self.positions.get(self.p('gripper_joint_name'))
-        position = float(measured if accepted_watchdog_open else result.position)
+        accepted_stalled_open = (
+            wrapped.status == GoalStatus.STATUS_ABORTED and
+            bool(result.stalled) and measured is not None and
+            float(measured) >= float(self.p('minimum_open_position')) and
+            abs(float(measured) - float(self.p('open_position'))) <=
+            float(self.p('open_tolerance')))
+        position = float(
+            measured if accepted_watchdog_open or accepted_stalled_open
+            else result.position)
         self.goal_handle = None
         self.watchdog_started = None
         self.watchdog_stable_since = None
@@ -232,9 +240,10 @@ class GripperOpen(Node):
         self.watchdog_accept_cancel = False
         self.watchdog_cancel_requested = False
         if (wrapped.status != GoalStatus.STATUS_SUCCEEDED and
-                not accepted_watchdog_open):
+                not accepted_watchdog_open and not accepted_stalled_open):
             self.report(f'FAILED: gripper action status={wrapped.status}')
-        elif not accepted_watchdog_open and not result.reached_goal:
+        elif (not accepted_watchdog_open and not accepted_stalled_open and
+              not result.reached_goal):
             self.report(
                 f'FAILED: open goal not reached; position={position:.4f}rad, '
                 f'effort={result.effort:.2f}, stalled={result.stalled}')
@@ -245,6 +254,8 @@ class GripperOpen(Node):
         else:
             if accepted_watchdog_open:
                 self.report(f'accepted watchdog open at {position:.4f}rad')
+            if accepted_stalled_open:
+                self.report(f'accepted stalled open at {position:.4f}rad')
             self.report(f'COMPLETED: gripper fully open at {position:.4f}rad')
 
 
