@@ -23,8 +23,8 @@
 ## Project Structure
 - `yolo/` — YOLO 학습, 데이터셋, 검출 로직
 - `omx/` — OMX-F 로봇팔 제어, 좌표 보정, Pick & Place
-- `Beagle_Lidar_and_AStar/` — Beagle 이동 로봇 (LiDAR 기반 A*+Pure Pursuit 주행, zone 정렬, OMX 신호 연동) — 현재 사용 중인 최종 버전
-- `Beagle/`, `Beagle_mobile_robot/` — Beagle 이전 버전 구현 (개발 과정 기록)
+- `Beagle_Lidar_and_AStar/` — **Beagle 이동 로봇 최종 버전** (LiDAR 기반 A*+Pure Pursuit 주행, zone 정렬, OMX 신호 연동) — 실제 제출/시연에 사용
+- `Beagle/`, `Beagle_mobile_robot/` — Beagle 이전 버전 구현, `Beagle_Lidar_and_AStar/`로 대체됨 (개발 과정 기록용으로 보존)
 - `integration/` — YOLO-OMX-Beagle 통합 파이프라인, 상태 연동, GUI
 - `docs/` — 팀 의사결정, 데이터 계약 등 공유 문서
 - `reports/` — (현재 비어있음; 최종 보고서는 위 Final Deliverables 링크 참고)

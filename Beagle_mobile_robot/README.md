@@ -1,5 +1,9 @@
 # Beagle Mobile Robot — Receiving/Defect Shuttle
 
+> **Superseded**: this is an earlier implementation, kept for development
+> history. The final version used for submission/demo is
+> [`Beagle_Lidar_and_AStar/`](../Beagle_Lidar_and_AStar/README.md).
+
 Beagle robot mission: idle at a **receiving zone**, wait for a "box placed"
 signal from the OMX arm, drive to a **defect zone**, wait 5 seconds, drive
 back, and wait for the next signal. While driving, a reactive layer routes
